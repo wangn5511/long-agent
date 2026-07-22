@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rightarm.example/schemas/rightarm-gesture-batch-v1.json",
+  "title": "Sealed right-arm gesture business batch",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "batch_id",
+    "created_at",
+    "producer",
+    "label_ontology",
+    "objects",
+    "annotations"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "rightarm.gesture.batch/v1"
+    },
+    "batch_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "producer": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "annotation_revision": {
+      "type": "string",
+      "minLength": 1
+    },
+    "label_ontology": {
+      "const": "rightarm-gesture-11/v1"
+    },
+    "objects": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/videoObject"
+      }
+    },
+    "annotations": {
+      "$ref": "#/$defs/contentObject"
+    }
+  },
+  "$defs": {
+    "contentObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bytes",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "uri": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "etag": {
+          "type": "string"
+        },
+        "version_id": {
+          "type": "string"
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "path"
+          ]
+        },
+        {
+          "required": [
+            "uri"
+          ]
+        }
+      ]
+    },
+    "videoObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bytes",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "uri": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "etag": {
+          "type": "string"
+        },
+        "version_id": {
+          "type": "string"
+        },
+        "device_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "subject_group_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Irreversible group id; never a real user identity."
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "path"
+          ]
+        },
+        {
+          "required": [
+            "uri"
+          ]
+        }
+      ]
+    }
+  }
+}

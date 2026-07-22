@@ -1,0 +1,113 @@
+apiVersion: mlops.openhands.dev/v1
+kind: MLOpsRun
+metadata:
+  name: rightarm-gesture-business-batch
+  labels:
+    loop: rightarm-gesture-v1
+    model: rgb-gated-stgcn
+    target: rk3588
+spec:
+  inputArtifactIds:
+    - <champion-base-model-artifact>
+    - <frozen-test-set-artifact>
+    - <rtm-detector-artifact>
+    - <rtm-person-pose-artifact>
+    - <rtm-hand-pose-artifact>
+    - <champion-evaluation-artifact>
+    - <code-artifact>
+    - <container-image-artifact>
+    - <label-mapping-artifact>
+    - <tensor-contract-artifact>
+  objective: >-
+    Consume one sealed right-arm gesture business batch, compile a traceable
+    11-class dataset, fine-tune the RGB-gated ST-GCN challenger from the sealed
+    champion base model, evaluate and convert it, verify it on a real RK3588,
+    and deploy it to the test fleet before a production canary decision.
+  source:
+    type: cos
+    uri: cos://<bucket>/<business-prefix>/batches/<batch-id>/
+    format: custom
+    credentialsRef: rightarm-cos-reader
+    landingCommand: >-
+      rightarm-mlops land-batch
+      --source-uri "$MLOPS_SOURCE_URI"
+      --require-marker _SUCCESS
+      --output-dir "$MLOPS_OUTPUT_DIR"
+  data:
+    contractUri: artifact://contracts/rightarm.gesture.batch/v1
+    targetUri: artifact://datasets/rightarm-gesture-11
+    validationCommand: >-
+      rightarm-mlops build-dataset
+      --raw-dataset "$MLOPS_RAW_DATASET"
+      --det-onnx "$MLOPS_RTM_DET_ONNX"
+      --person-pose-onnx "$MLOPS_RTM_PERSON_POSE_ONNX"
+      --hand-pose-onnx "$MLOPS_RTM_HAND_POSE_ONNX"
+      --frozen-test-set "$MLOPS_FROZEN_TEST_SET"
+      --output-dir "$MLOPS_OUTPUT_DIR"
+  training:
+    repository: https://git.cyto.one/cytoderm/rightArmPerception.git
+    revision: 41eddabba3516521bf0538afd57ef37da23097a1
+    command: >-
+      rightarm-mlops train
+      --config training/mmaction2/handoff/stgcn_hand21_3d/configs/stgcn_hand21-rgb-bs64-gated-v3-ft-rtm_add-11cls.py
+      --dataset "$MLOPS_DATASET_ARTIFACT"
+      --base-model "$MLOPS_BASE_MODEL_ARTIFACT"
+      --gpus 4
+      --output-dir "$MLOPS_OUTPUT_DIR"
+    image: registry.cyto.one/rightarm/stgcn-openmmlab@sha256:<image-digest>
+    resources:
+      cpu: 32
+      memory: 128Gi
+      gpu: 4
+    environment:
+      MLOPS_BASE_MODEL_ARTIFACT: <champion-base-model-artifact>
+      MLOPS_LABEL_ONTOLOGY: rightarm-gesture-11/v1
+      MLOPS_SEED: "42"
+    secretRefs:
+      - rightarm-artifact-writer
+  evaluation:
+    command: >-
+      rightarm-mlops evaluate
+      --predictions "$MLOPS_PREDICTIONS"
+      --champion-evaluation "$MLOPS_CHAMPION_EVALUATION"
+      --output-dir "$MLOPS_OUTPUT_DIR"
+    image: registry.cyto.one/rightarm/rknn-release@sha256:<image-digest>
+    gates:
+      - metric: offline.macro_f1_delta_vs_champion
+        op: gte
+        value: -0.005
+      - metric: offline.min_per_class_recall_delta_vs_champion
+        op: gte
+        value: -0.02
+      - metric: offline.none_false_accept_rate
+        op: lte
+        value: 0.01
+      - metric: conversion.pytorch_onnx_top1_match_rate
+        op: gte
+        value: 1.0
+      - metric: conversion.onnx_rknn_top1_match_rate
+        op: gte
+        value: 0.995
+      - metric: conversion.gate_decision_match_rate
+        op: gte
+        value: 0.995
+      - metric: edge.e2e_p95_latency_ratio_vs_champion
+        op: lte
+        value: 1.05
+    resources:
+      cpu: 16
+      memory: 64Gi
+      gpu: 0
+  deployment:
+    environment: rightarm-production
+    strategy: canary
+    serviceName: rightarm-gesture
+    observationWindowSeconds: 86400
+    initialCanaryPercent: 1
+    healthEndpoint: /model/rightarm-gesture/health
+  policy:
+    autonomy: confirm-production
+    maxAttemptsPerLogicalJob: 3
+    maxRunCostUsd: 300
+    maxRunDurationSeconds: 259200
+    maxArtifactBytes: 1099511627776

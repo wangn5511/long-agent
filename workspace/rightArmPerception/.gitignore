@@ -1,0 +1,143 @@
+# ===== Python bytecode =====
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+
+# ===== Python Packaging =====
+# Distribution / packaging
+*.egg
+*.egg-info/
+*.eggs/
+.eggs/
+pip-wheel-metadata/
+
+# PEP 582 local packages
+__pypackages__/
+
+# Python version management
+.python-version
+
+# Dependencies
+Pipfile.lock
+poetry.lock
+
+# ===== Python Testing & Tools =====
+# pytest
+.pytest_cache/
+
+# coverage reports
+.coverage
+htmlcov/
+.coverage.*
+
+# mypy type checker
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# tox
+.tox/
+
+# ===== IDE Configurations =====
+# PyCharm / IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+*.iws
+.idea_modules/
+
+# VS Code
+.vscode/
+*.code-workspace
+.history/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*.ipynb_checkpoints/
+
+# Sublime Text
+*.sublime-workspace
+*.sublime-project
+
+# Vim
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# ===== Deep Learning Artifacts =====
+# PyTorch / TensorFlow / Keras checkpoints & weights
+*.pt
+*.pth
+*.ckpt
+*.h5
+*.hdf5
+
+# ONNX / TensorRT / OpenVINO
+*.onnx
+*.trt
+*.xml
+*.bin
+
+# TensorBoard / Logging
+runs/
+tensorboard/
+events.out.*
+
+# MLflow
+mlruns/
+
+# Weights & Biases
+wandb/
+*.wandb/
+
+# HuggingFace Hub cache
+transformers_cache/
+torch_cache/
+huggingface_hub/
+
+# FastAI
+export.pkl
+
+# any other large binary data
+*.bin
+*.data
+
+# ===== Operating System Files =====
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ===== Log Files =====
+*.log
+
+# ===== Temporary Files =====
+*.tmp
+*.temp
+
+# ===== Build and Distribution =====
+build/
+dist/
+*.o
+*.a
+*.so
+*.whl
+wheelhouse/
+
+# ===== Environment Configuration =====
+.env
+.venv/
+env/
+
+# ===== Node.js =====
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

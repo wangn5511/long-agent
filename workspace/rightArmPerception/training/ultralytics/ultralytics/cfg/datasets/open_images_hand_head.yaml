@@ -1,0 +1,14 @@
+# 数据集根目录
+path: /home/datasets/rest_gesture_dataset/open_images_hand_head_dataset  # 数据集根目录路径
+
+# 训练、验证和测试集
+# 可以是相对路径、txt文件路径或列表
+train: images/train  # 训练图像文件夹（相对于path）
+val: images/val      # 验证图像文件夹（相对于path）
+test: images/test   # 测试集（可选）
+
+# 类别定义
+names:
+  0: hand
+  1: head
+  # 添加所有需要检测的类别

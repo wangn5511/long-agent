@@ -1,0 +1,32 @@
+meta:
+  name: stgcn_hand21_rk3588_int8
+  verbose: true
+  verbose_file: ./output/test.log
+
+model:
+  framework: onnx
+  model_path: ./example_assets/test.onnx
+
+rknn_config:
+  target_platform: rk3588
+  mean_values:
+  std_values:
+  quantized_dtype: w8a8
+  quantized_algorithm: normal
+  quantized_method: channel
+  quantized_hybrid_level: 0
+  quant_img_RGB2BGR: false
+  float_dtype: float16
+  optimization_level: 3
+  custom_string: stgcn_hand21
+
+build:
+  do_quantization: true
+  dataset: ./example_assets/test.txt
+
+export:
+  output_path: ./output/test_i8.rknn
+  accuracy_analysis:
+    inputs:
+      - ./example_assets/sample_0000.npy
+    output_dir: ./output/accuracy_analysis_test

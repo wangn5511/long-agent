@@ -1,0 +1,98 @@
+apiVersion: mlops.openhands.dev/v1
+kind: MLOpsLoop
+metadata:
+  name: rightarm-gesture-v1
+  labels:
+    model: rgb-gated-stgcn
+    target: rk3588
+spec:
+  source:
+    type: cos
+    uri: cos://<bucket>/<business-prefix>/batches/
+    completionMarker: _SUCCESS
+    manifestName: batch.manifest.json
+    credentialsRef: rightarm-cos-reader
+  trigger:
+    mode: hybrid
+    watermarkField: batch_id
+    pollIntervalSeconds: 300
+  runTemplate:
+    runSpecUri: artifact://run-specs/right-arm-gesture-loop-v1-run
+  taskSequence:
+    - name: inspect-data
+      kind: inspect-data
+      agentProfile: default
+      validator: rightarm-data-inspection-v1
+      maxAttempts: 2
+      timeoutSeconds: 3600
+    - name: build-dataset
+      kind: build-dataset
+      agentProfile: default
+      validator: rightarm-dataset-v1
+      maxAttempts: 3
+      timeoutSeconds: 43200
+    - name: train-challenger
+      kind: train
+      agentProfile: default
+      validator: rightarm-training-v1
+      maxAttempts: 3
+      timeoutSeconds: 172800
+    - name: evaluate-challenger
+      kind: evaluate
+      agentProfile: default
+      validator: rightarm-evaluation-v1
+      maxAttempts: 2
+      timeoutSeconds: 21600
+    - name: package-rknn
+      kind: package
+      agentProfile: default
+      validator: rightarm-rknn-package-v1
+      maxAttempts: 3
+      timeoutSeconds: 21600
+    - name: verify-rk3588
+      kind: verify-board
+      agentProfile: default
+      validator: rightarm-rk3588-v1
+      maxAttempts: 2
+      timeoutSeconds: 7200
+    - name: deploy-canary
+      kind: deploy
+      agentProfile: default
+      validator: rightarm-deployment-v1
+      maxAttempts: 2
+      timeoutSeconds: 7200
+      requiresHumanConfirmation: true
+    - name: monitor-canary
+      kind: monitor
+      agentProfile: default
+      validator: rightarm-canary-v1
+      maxAttempts: 2
+      timeoutSeconds: 90000
+  validation:
+    rejectUnverifiedTaskResult: true
+    requireArtifactHash: true
+    requireLineageClosureForRelease: true
+  persistence:
+    eventStoreRef: rightarm-mlops-postgres
+    artifactStoreRef: rightarm-mlops-cas
+  retry:
+    defaultMaxAttempts: 3
+    initialBackoffSeconds: 30
+    maxBackoffSeconds: 1800
+    retryableFailureClasses:
+      - transient-network
+      - provider-rate-limit
+      - gpu-node-lost
+      - executor-timeout
+      - cuda-oom-with-valid-proposal
+  stop:
+    maxConsecutiveFailedRuns: 3
+    maxRunDurationSeconds: 259200
+    terminalFailureClasses:
+      - source-integrity-failed
+      - invalid-label-ontology
+      - release-lineage-incomplete
+      - production-authorization-denied
+  concurrency:
+    maxActiveRuns: 1
+    maxActiveAttemptsPerRun: 1

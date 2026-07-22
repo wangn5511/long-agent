@@ -1,0 +1,50 @@
+meta:
+  name: my_model_rk3588_int8
+  verbose: true
+  verbose_file: ./output/export.log
+
+model:
+  framework: onnx
+  model_path: ./my_model.onnx
+  inputs:
+  outputs:
+  input_size_list:
+  input_initial_val_files:
+
+rknn_config:
+  target_platform: rk3588
+  mean_values:
+  std_values:
+  quantized_dtype: w8a8
+  quantized_algorithm: normal
+  quantized_method: channel
+  quantized_hybrid_level: 0
+  quant_img_RGB2BGR: false
+  float_dtype: float16
+  optimization_level: 3
+  custom_string:
+  remove_weight: false
+  compress_weight: false
+  inputs_yuv_fmt:
+  single_core_mode: false
+  dynamic_input:
+  model_pruning: false
+  op_target:
+  quantize_weight: false
+  remove_reshape: false
+  sparse_infer: false
+  enable_flash_attention: false
+  auto_hybrid_cos_thresh: 0.98
+  auto_hybrid_euc_thresh:
+
+build:
+  do_quantization: true
+  rknn_batch_size:
+  auto_hybrid: false
+  dataset: ./calibration_dataset.txt
+
+export:
+  output_path: ./output/my_model.rknn
+  accuracy_analysis:
+    inputs:
+    output_dir:

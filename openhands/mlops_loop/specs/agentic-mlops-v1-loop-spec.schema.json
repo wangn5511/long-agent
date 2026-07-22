@@ -1,0 +1,303 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mlops.openhands.dev/schemas/v1/mlops-loop-spec.json",
+  "title": "Agentic MLOps Loop",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {
+      "const": "mlops.openhands.dev/v1"
+    },
+    "kind": {
+      "const": "MLOpsLoop"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "trigger",
+        "runTemplate",
+        "taskSequence",
+        "validation",
+        "persistence",
+        "retry",
+        "stop"
+      ],
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "trigger": {
+          "$ref": "#/$defs/trigger"
+        },
+        "runTemplate": {
+          "$ref": "#/$defs/runTemplate"
+        },
+        "taskSequence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/task"
+          },
+          "minItems": 1
+        },
+        "validation": {
+          "$ref": "#/$defs/validation"
+        },
+        "persistence": {
+          "$ref": "#/$defs/persistence"
+        },
+        "retry": {
+          "$ref": "#/$defs/retry"
+        },
+        "stop": {
+          "$ref": "#/$defs/stop"
+        },
+        "concurrency": {
+          "$ref": "#/$defs/concurrency"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "secretRef": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "uri", "completionMarker", "manifestName"],
+      "properties": {
+        "type": {
+          "enum": ["local", "http", "s3", "tos", "cos"]
+        },
+        "uri": {
+          "type": "string",
+          "minLength": 1
+        },
+        "completionMarker": {
+          "type": "string",
+          "minLength": 1
+        },
+        "manifestName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "credentialsRef": {
+          "$ref": "#/$defs/secretRef"
+        }
+      }
+    },
+    "trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "watermarkField"],
+      "properties": {
+        "mode": {
+          "enum": ["event", "poll", "hybrid"]
+        },
+        "watermarkField": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pollIntervalSeconds": {
+          "type": "integer",
+          "minimum": 10
+        }
+      }
+    },
+    "runTemplate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runSpecUri"],
+      "properties": {
+        "runSpecUri": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "kind",
+        "agentProfile",
+        "validator",
+        "maxAttempts",
+        "timeoutSeconds"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+        },
+        "kind": {
+          "enum": [
+            "inspect-data",
+            "build-dataset",
+            "train",
+            "evaluate",
+            "package",
+            "verify-board",
+            "deploy",
+            "monitor",
+            "decision"
+          ]
+        },
+        "agentProfile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "validator": {
+          "type": "string",
+          "minLength": 1
+        },
+        "maxAttempts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "requiresHumanConfirmation": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rejectUnverifiedTaskResult",
+        "requireArtifactHash",
+        "requireLineageClosureForRelease"
+      ],
+      "properties": {
+        "rejectUnverifiedTaskResult": {
+          "const": true
+        },
+        "requireArtifactHash": {
+          "const": true
+        },
+        "requireLineageClosureForRelease": {
+          "const": true
+        }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eventStoreRef", "artifactStoreRef"],
+      "properties": {
+        "eventStoreRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "artifactStoreRef": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "retry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "defaultMaxAttempts",
+        "initialBackoffSeconds",
+        "maxBackoffSeconds",
+        "retryableFailureClasses"
+      ],
+      "properties": {
+        "defaultMaxAttempts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "initialBackoffSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxBackoffSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "retryableFailureClasses": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "stop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxConsecutiveFailedRuns",
+        "maxRunDurationSeconds",
+        "terminalFailureClasses"
+      ],
+      "properties": {
+        "maxConsecutiveFailedRuns": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxRunDurationSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "terminalFailureClasses": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "concurrency": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxActiveRuns": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        },
+        "maxActiveAttemptsPerRun": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        }
+      },
+      "default": {}
+    }
+  }
+}

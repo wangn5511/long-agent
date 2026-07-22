@@ -1,0 +1,25 @@
+{
+  "num_classes": 9,
+  "index_to_label": {
+    "0": "WAVE_IN",
+    "1": "FIVE",
+    "2": "CLICK",
+    "3": "ROTATE",
+    "4": "SLIDE_DOWN",
+    "5": "SLIDE_UP",
+    "6": "OK",
+    "7": "CURSOR",
+    "8": "NONE"
+  },
+  "label_to_index": {
+    "WAVE_IN": 0,
+    "FIVE": 1,
+    "CLICK": 2,
+    "ROTATE": 3,
+    "SLIDE_DOWN": 4,
+    "SLIDE_UP": 5,
+    "OK": 6,
+    "CURSOR": 7,
+    "NONE": 8
+  }
+}

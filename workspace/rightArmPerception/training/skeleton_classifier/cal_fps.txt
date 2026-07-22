@@ -1,0 +1,11 @@
+input json: /home/datasets/cybopal_dataset/final_gesture_stgcn_v1/val/one_v0__base_debug_20251222_122933_000312_000342.json
+runs: 200
+warmup: 20
+input shape: (1, 672)
+predicted class id: 0
+predicted class name: WAVE_IN
+probabilities: [9.9963248e-01 4.6078126e-06 3.6282477e-04]
+avg model-only time: 15.336 ms
+model-only fps: 65.206
+avg end-to-end time: 16.560 ms
+end-to-end fps: 60.386

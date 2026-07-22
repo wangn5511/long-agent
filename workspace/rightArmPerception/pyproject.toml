@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rightarm-mlops"
+version = "0.1.0"
+description = "Deterministic job adapters for the right-arm gesture MLOps loop"
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.24"]
+
+[project.scripts]
+rightarm-mlops = "rightarm_mlops.cli:main"
+rightarm-cos-trigger = "rightarm_mlops.cos_trigger:main"
+
+[tool.setuptools.packages.find]
+include = ["rightarm_mlops*"]

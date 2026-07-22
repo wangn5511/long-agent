@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly MODEL_AGENT_COMMAND_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly MODEL_AGENT_COMMAND_ENV="${MODEL_AGENT_COMMAND_ROOT}/.env"
+
+if [[ ! -f "${MODEL_AGENT_COMMAND_ENV}" ]]; then
+  echo "model-agent: run ./setup.sh first" >&2
+  exit 2
+fi
+
+set -a
+# shellcheck disable=SC1090
+source "${MODEL_AGENT_COMMAND_ENV}"
+set +a
+
+export PYTHONPATH="${MODEL_AGENT_COMMAND_ROOT}/workspace/rightArmPerception${PYTHONPATH:+:${PYTHONPATH}}"
+exec python3 -m rightarm_mlops.model_agent_cli "$@"

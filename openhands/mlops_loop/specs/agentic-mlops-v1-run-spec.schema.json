@@ -1,0 +1,302 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mlops.openhands.dev/schemas/v1/mlops-run-spec.json",
+  "title": "Agentic MLOps Run",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {
+      "const": "mlops.openhands.dev/v1"
+    },
+    "kind": {
+      "const": "MLOpsRun"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "objective",
+        "source",
+        "training",
+        "evaluation",
+        "deployment",
+        "policy"
+      ],
+      "properties": {
+        "inputArtifactIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true,
+          "default": []
+        },
+        "objective": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "data": {
+          "$ref": "#/$defs/data"
+        },
+        "training": {
+          "$ref": "#/$defs/training"
+        },
+        "evaluation": {
+          "$ref": "#/$defs/evaluation"
+        },
+        "deployment": {
+          "$ref": "#/$defs/deployment"
+        },
+        "policy": {
+          "$ref": "#/$defs/policy"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "secretRef": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "uri", "format"],
+      "properties": {
+        "type": {
+          "enum": ["local", "http", "s3", "tos", "cos"]
+        },
+        "uri": {
+          "type": "string",
+          "minLength": 1
+        },
+        "format": {
+          "enum": ["csv", "jsonl", "parquet", "custom"]
+        },
+        "credentialsRef": {
+          "$ref": "#/$defs/secretRef"
+        },
+        "landingCommand": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "contractUri": {
+          "type": "string"
+        },
+        "targetUri": {
+          "type": "string"
+        },
+        "validationCommand": {
+          "type": "string"
+        }
+      },
+      "default": {}
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "memory": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*(?:Mi|Gi)$"
+        },
+        "gpu": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "default": {}
+    },
+    "training": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "revision", "command", "image"],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1
+        },
+        "image": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resources": {
+          "$ref": "#/$defs/resources"
+        },
+        "environment": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "secretRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/secretRef"
+          },
+          "uniqueItems": true,
+          "default": []
+        }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metric", "op", "value"],
+      "properties": {
+        "metric": {
+          "type": "string",
+          "minLength": 1
+        },
+        "slice": {
+          "type": "string"
+        },
+        "op": {
+          "enum": ["gt", "gte", "lt", "lte", "eq"]
+        },
+        "value": {
+          "type": "number"
+        },
+        "required": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "evaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "gates"],
+      "properties": {
+        "command": {
+          "type": "string",
+          "minLength": 1
+        },
+        "image": {
+          "type": "string"
+        },
+        "gates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/gate"
+          },
+          "minItems": 1
+        },
+        "resources": {
+          "$ref": "#/$defs/resources"
+        }
+      }
+    },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "environment",
+        "strategy",
+        "serviceName",
+        "observationWindowSeconds"
+      ],
+      "properties": {
+        "environment": {
+          "type": "string",
+          "minLength": 1
+        },
+        "strategy": {
+          "enum": ["blue-green", "canary"]
+        },
+        "serviceName": {
+          "type": "string",
+          "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+        },
+        "observationWindowSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "initialCanaryPercent": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 10
+        },
+        "healthEndpoint": {
+          "type": "string",
+          "default": "/health"
+        }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "autonomy",
+        "maxAttemptsPerLogicalJob",
+        "maxRunCostUsd",
+        "maxRunDurationSeconds"
+      ],
+      "properties": {
+        "autonomy": {
+          "enum": ["full", "confirm-production", "confirm-risky"]
+        },
+        "maxAttemptsPerLogicalJob": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxRunCostUsd": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "maxRunDurationSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxArtifactBytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}

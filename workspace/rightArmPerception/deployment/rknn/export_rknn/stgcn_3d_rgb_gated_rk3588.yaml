@@ -1,0 +1,93 @@
+# RKNN export config for the 4-input gated RGB+skeleton fusion model.
+#
+# Source ONNX:
+#   /home/results/yangzhao/stgcn_3d_rgb_gated_kproi_abspos_4ch/model.onnx
+#
+# ONNX inputs (in this exact order):
+#   keypoint    (1, 16, 21, 4)   float32, wrist-relative + scale-normalised + per-joint score
+#   imgs        (1, 16, 3, 96, 96) float32 in [0, 255]  (ONNX graph applies ImageNet mean/std)
+#   handedness  (1,)             int64    0/1/2 = Left/Right/Unknown
+#   global_traj (1, 16, 5)       float32, delta xyz + abs xy normalised by img W/H
+#
+# ONNX outputs:
+#   cls_score   (1, 10)          raw logits (10 classes incl. WAVE_OUT + NONE)
+#   gate_logit  (1, 1)           raw scalar; deploy applies sigmoid + threshold
+
+meta:
+  name: stgcn_3d_rgb_gated_kproi_abspos_4ch_rk3588_int8
+  verbose: true
+  verbose_file: /home/results/yangzhao/stgcn_3d_rgb_gated_kproi_abspos_4ch/rknn.log
+
+model:
+  framework: onnx
+  model_path: /home/results/yangzhao/stgcn_3d_rgb_gated_kproi_abspos_4ch/model.onnx
+  inputs:
+    - keypoint
+    - imgs
+    - handedness
+    - global_traj
+  input_size_list:
+    - [1, 16, 21, 4]
+    - [1, 16, 3, 96, 96]
+    - [1]
+    - [1, 16, 5]
+  outputs:
+    - cls_score
+    - gate_logit
+  input_initial_val_files:
+
+rknn_config:
+  target_platform: rk3588
+  # Mean/std must stay empty: the ONNX graph already does ImageNet
+  # normalisation on `imgs`.  Letting RKNN add another mean/std would
+  # double-normalise.
+  mean_values:
+  std_values:
+  quantized_dtype: w8a8
+  quantized_algorithm: mmse        # MSE-optimised calibration: better for the
+                                   # outlier weights flagged in build (Conv_901
+                                   # had outlier value 11.1, Conv_919 had -36.9).
+                                   # Slower to build but typically reduces top1
+                                   # loss vs `normal` minmax calibration.
+  quantized_method: channel        # per-channel quantisation helps the RGB
+                                   # branch and the small motion/handedness
+                                   # branches keep separate scales.
+  quantized_hybrid_level: 0
+  quant_img_RGB2BGR: false          # imgs are already RGB CHW from our pipeline.
+  float_dtype: float16
+  optimization_level: 3
+  custom_string: stgcn_3d_rgb_gated_kproi_abspos_4ch
+  remove_weight: false
+  compress_weight: false
+  inputs_yuv_fmt:
+  single_core_mode: false
+  dynamic_input:
+  model_pruning: false
+  op_target:
+  quantize_weight: false
+  remove_reshape: false
+  sparse_infer: false
+  enable_flash_attention: false
+  # Auto-hybrid keeps INT8 by default but allows the converter to demote
+  # individual ops to FP16 when their cosine similarity with FP would drop
+  # below this threshold.  Tighten this if accuracy_analysis shows degradation.
+  auto_hybrid_cos_thresh: 0.98
+  auto_hybrid_euc_thresh:
+
+build:
+  do_quantization: true
+  rknn_batch_size:
+  # auto_hybrid lets the converter demote layers whose post-quant cosine
+  # similarity vs FP would drop below `rknn_config.auto_hybrid_cos_thresh`
+  # back to FP16 - critical here because the 4-stream concat + fc1/fc2/gate
+  # tail mixes very different per-branch value scales (skel 256ch wide range
+  # vs hand_embed 8ch ~1.0).  Without this we lose ~7.5pp top1 on INT8.
+  auto_hybrid: false
+  dataset: /home/results/yangzhao/stgcn_3d_rgb_gated_kproi_abspos_4ch/calib/stgcn_3d_rgb_gated_calibration_dataset.txt
+
+export:
+  output_path: /home/results/yangzhao/stgcn_3d_rgb_gated_kproi_abspos_4ch/model_i8_mmse.rknn
+  accuracy_analysis:
+    # Filled in via --set on the CLI to point at one calibration row.
+    inputs:
+    output_dir: /home/results/yangzhao/stgcn_3d_rgb_gated_kproi_abspos_4ch/accuracy_analysis

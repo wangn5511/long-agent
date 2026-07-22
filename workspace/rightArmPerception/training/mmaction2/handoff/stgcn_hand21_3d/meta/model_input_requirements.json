@@ -1,0 +1,49 @@
+{
+  "common": {
+    "tensor_layout": "(batch, num_frames, num_joints, channels)",
+    "num_joints": 21,
+    "channels": [
+      "x",
+      "y",
+      "z"
+    ],
+    "batch_size_for_realtime": 1,
+    "graph_layout": "hand21",
+    "keypoint_order_must_match_training": true,
+    "frame_sampling": "UniformSampleFrames",
+    "preprocess": [
+      "Input must already be skeleton keypoints, not raw RGB frames.",
+      "Each sample must contain 21 hand joints in the same order as training.",
+      "Each joint must provide wrist-relative and scale-normalized x, y, z coordinates.",
+      "Before normalization, missing frames should be interpolated on world_landmarks_smooth.",
+      "The deployed pipeline must keep the same temporal length as the exported model."
+    ],
+    "extra_inputs": [
+      "handedness label id",
+      "handedness confidence score"
+    ]
+  },
+  "models": {
+    "u16": {
+      "clip_len": 16,
+      "input_shape": [
+        1,
+        16,
+        21,
+        3
+      ],
+      "config_file": "configs/stgcn_hand21-joint-u16-30e_class9-keypoint-3d.py"
+    }
+  },
+  "output": {
+    "type": "classification_scores",
+    "shape": [
+      1,
+      9
+    ],
+    "postprocess": [
+      "Take argmax over the class dimension for top-1 prediction.",
+      "Map class index to label with hand21_label_mapping.json or hand21_labels.txt."
+    ]
+  }
+}

@@ -1,0 +1,7 @@
+decord >= 0.4.1
+einops
+matplotlib
+numpy
+Pillow
+scipy
+torch>=1.3

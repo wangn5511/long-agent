@@ -1,0 +1,15 @@
+{
+  "inspect-batch": "registry.example.com/rightarm/data@sha256:REPLACE_WITH_64_HEX_DIGEST",
+  "land-batch": "registry.example.com/rightarm/data@sha256:REPLACE_WITH_64_HEX_DIGEST",
+  "build-dataset": "registry.example.com/rightarm/rtm@sha256:REPLACE_WITH_64_HEX_DIGEST",
+  "train": "registry.example.com/rightarm/train@sha256:REPLACE_WITH_64_HEX_DIGEST",
+  "evaluate": "registry.example.com/rightarm/release@sha256:REPLACE_WITH_64_HEX_DIGEST",
+  "export-onnx": "registry.example.com/rightarm/release@sha256:REPLACE_WITH_64_HEX_DIGEST",
+  "build-calibration": "registry.example.com/rightarm/release@sha256:REPLACE_WITH_64_HEX_DIGEST",
+  "export-rknn": "registry.example.com/rightarm/rknn@sha256:REPLACE_WITH_64_HEX_DIGEST",
+  "verify-conversion": "registry.example.com/rightarm/rknn@sha256:REPLACE_WITH_64_HEX_DIGEST",
+  "verify-board": "registry.example.com/rightarm/board@sha256:REPLACE_WITH_64_HEX_DIGEST",
+  "deploy": "registry.example.com/rightarm/fleet@sha256:REPLACE_WITH_64_HEX_DIGEST",
+  "observe-deployment": "registry.example.com/rightarm/fleet@sha256:REPLACE_WITH_64_HEX_DIGEST",
+  "rollback": "registry.example.com/rightarm/fleet@sha256:REPLACE_WITH_64_HEX_DIGEST"
+}

@@ -1,0 +1,52 @@
+schema_version: rightarm.model-agent/pipeline-v1
+
+workspace:
+  repository: /workspace/rightArmPerception
+  output_root: /var/lib/rightarm-mlops/runs
+
+data:
+  source_type: tencent-cos
+  source_uri: cos://REPLACE_BUCKET/REPLACE_PREFIX/
+  credentials_file: /run/secrets/tencent-cos.yaml
+  completion_marker: _SUCCESS
+  annotation_format: compact_4col
+  validation_ratio: 0.2
+  seed: 42
+  canonical_categories:
+    - WAVE_IN
+    - WAVE_OUT
+    - FIVE
+    - CLICK
+    - ROTATE
+    - SLIDE_DOWN
+    - SLIDE_UP
+    - OK
+    - CURSOR
+    - GUN
+    - NONE
+  baseline_dataset: artifact://REPLACE_BASELINE_DATASET_ID
+
+training:
+  config: training/mmaction2/handoff/stgcn_hand21_3d/configs/stgcn_hand21-rgb-bs64-gated-v3-ft-rtm_add-11cls.py
+  base_checkpoint: artifact://REPLACE_BASE_CHECKPOINT_ID
+  gpu_count: 1
+  smoke_epochs: 1
+  full_epochs: 50
+  batch_size: 32
+  workers: 8
+  seed: 42
+
+evaluation:
+  require_macro_f1: true
+  require_per_class_recall: true
+  require_none_false_accept_rate: true
+  compare_with_champion: true
+
+export:
+  formats:
+    - onnx
+    - rknn
+  verify_pytorch_onnx: true
+  verify_onnx_rknn: true
+  target: rk3588
+  deployment_requires_human_confirmation: true

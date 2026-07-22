@@ -1,0 +1,45 @@
+meta:
+  name: multi_input_example_rk3588_int8
+  verbose: true
+  verbose_file: ./output/multi_input_example.log
+
+model:
+  framework: onnx
+  model_path: ./example_assets/test.onnx
+  inputs:
+    - input0
+    - input1
+  input_size_list:
+    - [1, 3, 128, 128]
+    - [1, 3, 256, 256]
+  outputs:
+  input_initial_val_files:
+
+rknn_config:
+  target_platform: rk3588
+  mean_values:
+    - [0, 0, 0]
+    - [0, 0, 0]
+  std_values:
+    - [1, 1, 1]
+    - [1, 1, 1]
+  quantized_dtype: w8a8
+  quantized_algorithm: normal
+  quantized_method: channel
+  quantized_hybrid_level: 0
+  quant_img_RGB2BGR: false
+  float_dtype: float16
+  optimization_level: 3
+  custom_string: multi_input_example
+
+build:
+  do_quantization: true
+  dataset: ./example_assets/multi_input_test.txt
+
+export:
+  output_path: ./output/multi_input_example_i8.rknn
+  accuracy_analysis:
+    inputs:
+      - ./example_assets/sample_0000.npy
+      - ./example_assets/sample_0001.npy
+    output_dir: ./output/accuracy_analysis_multi_input

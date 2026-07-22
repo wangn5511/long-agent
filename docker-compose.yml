@@ -1,0 +1,142 @@
+name: model-agent-${MODEL_AGENT_INSTANCE_NAME}
+
+services:
+  openhands:
+    image: ${MODEL_AGENT_IMAGE}
+    container_name: model-agent-openhands-${MODEL_AGENT_INSTANCE_NAME}
+    user: "${HOST_UID}:${HOST_GID}"
+    restart: unless-stopped
+    init: true
+    environment:
+      HOST_UID: ${HOST_UID}
+      HOST_GID: ${HOST_GID}
+      HOME: /home/model-agent
+      RUNTIME: local
+      INSTALL_DOCKER: "0"
+      FILE_STORE: local
+      FILE_STORE_PATH: /home/model-agent/.openhands
+      OH_PERSISTENCE_DIR: /home/model-agent/.openhands
+      WORKSPACE_BASE: /opt/workspace_base/rightArmPerception
+      WORKSPACE_MOUNT_PATH: /opt/workspace_base/rightArmPerception
+      SERVE_FRONTEND: "true"
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      ALL_PROXY: ${ALL_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,openhands,loop-controller}
+    ports:
+      - "127.0.0.1:${OPENHANDS_PORT}:3000"
+    volumes:
+      - type: bind
+        source: ${MODEL_AGENT_STATE_DIR}/openhands
+        target: /home/model-agent
+      - type: bind
+        source: ${MODEL_AGENT_ROOT}/workspace
+        target: /opt/workspace_base
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 4096
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:3000/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 30s
+    stop_grace_period: 30s
+
+  loop-controller:
+    image: ${MODEL_AGENT_IMAGE}
+    container_name: model-agent-loop-${MODEL_AGENT_INSTANCE_NAME}
+    user: "${HOST_UID}:${HOST_GID}"
+    group_add:
+      - "${DOCKER_GID}"
+    restart: unless-stopped
+    init: true
+    depends_on:
+      openhands:
+        condition: service_healthy
+    command: ["/usr/local/bin/start-model-agent-controller"]
+    working_dir: /workspace/rightArmPerception
+    environment:
+      HOST_UID: ${HOST_UID}
+      HOST_GID: ${HOST_GID}
+      HOME: /home/model-agent
+      PYTHONPATH: /app:/workspace/rightArmPerception
+      OPENHANDS_INTERNAL_URL: http://openhands:3000
+      MLOPS_TASK_MCP_URL: http://loop-controller:8765/mcp/
+      MLOPS_TRIGGER_MODE: ${MLOPS_TRIGGER_MODE:-manual}
+      MLOPS_POLL_INTERVAL_SECONDS: ${MLOPS_POLL_INTERVAL_SECONDS:-86400}
+      MLOPS_RECONCILE_INTERVAL_SECONDS: ${MLOPS_RECONCILE_INTERVAL_SECONDS:-5}
+      MLOPS_INCOMING: ${MLOPS_INCOMING:-/var/lib/rightarm-mlops/incoming}
+      MLOPS_WATCH_COMMAND_JSON: ${MLOPS_WATCH_COMMAND_JSON:-}
+      MLOPS_LOOP_SPEC: ${MLOPS_LOOP_SPEC:-/app/openhands/mlops_loop/specs/right-arm-gesture-loop-v1-loop.yaml}
+      MLOPS_RUN_TEMPLATE: ${MLOPS_RUN_TEMPLATE:-/app/openhands/mlops_loop/specs/right-arm-gesture-loop-v1-run.yaml}
+      MLOPS_EXECUTOR: ${MLOPS_EXECUTOR:-local}
+      MLOPS_DOCKER_IMAGE_CATALOG: /app-config/generated/docker-images.json
+      MLOPS_DOCKER_SOURCE_ROOT: ${MLOPS_DOCKER_SOURCE_ROOT:-}
+      MLOPS_TRAIN_GPU_COUNT: ${MLOPS_TRAIN_GPU_COUNT:-}
+      RIGHTARM_REPOSITORY: ${RIGHTARM_REPOSITORY:-}
+      RIGHTARM_BRANCH: ${RIGHTARM_BRANCH:-}
+      RIGHTARM_COS_CONFIG_PATH: /run/secrets/tencent-cos.yaml
+      RIGHTARM_COSCLI_PATH: /usr/local/bin/coscli
+      RIGHTARM_COS_ALLOWED_PREFIX: ${RIGHTARM_COS_ALLOWED_PREFIX:-}
+      RIGHTARM_COS_DISK_RESERVE_BYTES: ${RIGHTARM_COS_DISK_RESERVE_BYTES:-21474836480}
+      MLOPS_CHAMPION_BASE_MODEL_ARTIFACT: ${MLOPS_CHAMPION_BASE_MODEL_ARTIFACT:-}
+      MLOPS_FROZEN_TEST_SET_ARTIFACT: ${MLOPS_FROZEN_TEST_SET_ARTIFACT:-}
+      MLOPS_RTM_DETECTOR_ARTIFACT: ${MLOPS_RTM_DETECTOR_ARTIFACT:-}
+      MLOPS_RTM_PERSON_POSE_ARTIFACT: ${MLOPS_RTM_PERSON_POSE_ARTIFACT:-}
+      MLOPS_RTM_HAND_POSE_ARTIFACT: ${MLOPS_RTM_HAND_POSE_ARTIFACT:-}
+      MLOPS_CHAMPION_EVALUATION_ARTIFACT: ${MLOPS_CHAMPION_EVALUATION_ARTIFACT:-}
+      MLOPS_CODE_ARTIFACT: ${MLOPS_CODE_ARTIFACT:-}
+      MLOPS_CONTAINER_IMAGE_ARTIFACT: ${MLOPS_CONTAINER_IMAGE_ARTIFACT:-}
+      MLOPS_LABEL_MAPPING_ARTIFACT: ${MLOPS_LABEL_MAPPING_ARTIFACT:-}
+      MLOPS_TENSOR_CONTRACT_ARTIFACT: ${MLOPS_TENSOR_CONTRACT_ARTIFACT:-}
+      MLOPS_IMAGE_DIGEST: ${MLOPS_IMAGE_DIGEST:-}
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      ALL_PROXY: ${ALL_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,openhands,loop-controller}
+    ports:
+      - "127.0.0.1:${MLOPS_PORT}:8765"
+    volumes:
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+      - type: bind
+        source: ${MODEL_AGENT_ROOT}/workspace/rightArmPerception
+        target: /workspace/rightArmPerception
+      - type: bind
+        source: ${MODEL_AGENT_ROOT}/configs
+        target: /app-config
+        read_only: true
+      - type: bind
+        source: ${MODEL_AGENT_STATE_DIR}/controller-home
+        target: /home/model-agent
+      - type: bind
+        source: ${MODEL_AGENT_STATE_DIR}/mlops
+        target: /var/lib/rightarm-mlops
+      - type: bind
+        source: ${MODEL_AGENT_STATE_DIR}/secrets/mlops-operator-token
+        target: /run/secrets/mlops_operator_token
+        read_only: true
+      - type: bind
+        source: ${TENCENT_COS_CONFIG_PATH}
+        target: /run/secrets/tencent-cos.yaml
+        read_only: true
+      - type: bind
+        source: ${COSCLI_HOST_PATH}
+        target: /usr/local/bin/coscli
+        read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 4096
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8765/openapi.json"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    stop_grace_period: 30s

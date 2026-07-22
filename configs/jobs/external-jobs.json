@@ -1,0 +1,18 @@
+{
+  "build-calibration": [
+    "python",
+    "deployment/rknn/export_rknn/build_stgcn_3d_rgb_gated_calibration.py"
+  ],
+  "export-onnx": [
+    "python",
+    "training/mmaction2/handoff/stgcn_hand21_3d/tools/export_onnx_gcn_3d_rgb.py"
+  ],
+  "export-rknn": [
+    "python",
+    "deployment/rknn/export_rknn/export_rknn.py"
+  ],
+  "verify-conversion": [
+    "python",
+    "deployment/rknn/export_rknn/verify_stgcn_3d_rgb_gated_onnx_vs_rknn.py"
+  ]
+}

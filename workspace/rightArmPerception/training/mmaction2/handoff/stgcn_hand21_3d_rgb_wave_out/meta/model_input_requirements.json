@@ -1,0 +1,90 @@
+{
+  "common": {
+    "batch_size_for_realtime": 1,
+    "clip_len": 16,
+    "num_joints": 21,
+    "skeleton_channels": [
+      "x",
+      "y",
+      "z"
+    ],
+    "graph_layout": "hand21",
+    "keypoint_tensor_layout": "(batch, num_frames, num_joints, channels)",
+    "rgb_tensor_layout": "(batch, num_frames, 3, height, width)",
+    "keypoint_order_must_match_training": true,
+    "preprocess": [
+      "Input keypoint must already be wrist-relative and scale-normalized skeleton keypoints.",
+      "Each sample must contain 21 hand joints in the same order as training.",
+      "imgs must be hand ROI RGB clips before ImageNet mean/std normalization.",
+      "global_traj must be built from upperbody_wrist_xyz relative to the first valid frame.",
+      "The deployed pipeline must keep the same temporal length as the exported model."
+    ],
+    "extra_inputs": [
+      {
+        "name": "imgs",
+        "shape": [
+          1,
+          16,
+          3,
+          96,
+          96
+        ],
+        "dtype": "float32",
+        "definition": "Hand ROI RGB frames in [0, 255] before internal normalization."
+      },
+      {
+        "name": "handedness",
+        "shape": [
+          1
+        ],
+        "dtype": "int64",
+        "mapping": {
+          "0": "Left",
+          "1": "Right",
+          "2": "Unknown"
+        }
+      },
+      {
+        "name": "global_traj",
+        "shape": [
+          1,
+          16,
+          3
+        ],
+        "dtype": "float32",
+        "definition": "upperbody_wrist_xyz[t] - upperbody_wrist_xyz[first_valid], then normalize x by img_w and y by img_h while keeping z raw"
+      }
+    ]
+  },
+  "models": {
+    "u16_rgb_wave_out": {
+      "clip_len": 16,
+      "input_shape_keypoint": [
+        1,
+        16,
+        21,
+        3
+      ],
+      "input_shape_imgs": [
+        1,
+        16,
+        3,
+        96,
+        96
+      ],
+      "config_file": "configs/stgcn_hand21-rgb-rgb48.py",
+      "uses_handedness_score": false
+    }
+  },
+  "output": {
+    "type": "classification_scores",
+    "shape": [
+      1,
+      10
+    ],
+    "postprocess": [
+      "Take argmax over the class dimension for top-1 prediction.",
+      "Map class index to label with hand21_label_mapping.json or hand21_labels.txt."
+    ]
+  }
+}
