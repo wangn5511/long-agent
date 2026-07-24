@@ -3,17 +3,50 @@
 本仓库以定制版 OpenHands 为主体，同时交付中央 MLOps 循环、任务 Agent 规范、
 rightArmPerception 模型代码和统一运行配置。
 
-## 目录
+最近一次真实 Run 的数据、基线、四轮训练方案、失败根因和审计时间线：
+
+**[手势模型持续改进 Run 报告](docs/reports/run_d6026a6b4e1bc3912b170e98-summary.html)**
+
+## 核心代码导航
+
+本仓库包含一份可独立构建的 OpenHands fork，因此文件数量会明显多于普通训练项目。
+日常开发主要集中在以下目录：
+
+| 层次 | 目录 | 作用 |
+| --- | --- | --- |
+| Agent Harness | `openhands/app_server/mlops_task/`、`skills/` | 工具边界、任务规范、长时作业观察与 Agent 执行环境 |
+| Model Loop Engine | `openhands/mlops_loop/` | Run 状态机、事件账本、调度、恢复、模型晋级和回滚 |
+| Model Adapter | `workspace/rightArmPerception/rightarm_mlops/` | 数据、训练、评测、导出和模型特定协议 |
+| Runtime | `containers/model-agent/`、`docker-compose.yml` | OpenHands 与 Loop Controller 的隔离运行环境 |
+| Configuration | `configs/` | 非秘密镜像、作业和运行参数 |
+| Reports | `docs/reports/` | 可分享的实验汇总；原始产物不进入 Git |
+
+### 上游运行时
+
+以下内容主要来自 OpenHands 或模型训练依赖。它们不是 Model Agent 的业务入口，
+但当前仍用于从源码构建运行镜像或复现实验，因此暂不删除：
+
+- `frontend/`：构建 OpenHands 网页；
+- `openhands/` 中除上述定制模块外的代码：OpenHands 应用运行时；
+- `workspace/rightArmPerception/training/`：手势模型和 MMAction2 训练实现；
+- `enterprise/`、`openhands-ui/`、`kind/`：上游快照内容，后续可在拆分
+  Runtime 仓库时移出主仓库。
+
+## 目录概览
 
 ```text
 model-agent/
-├── openhands/                       # OpenHands 后端
-│   └── mlops_loop/                  # 中央 MLOps 循环
-├── frontend/                        # OpenHands 网页
-├── workspace/rightArmPerception/    # 数据、训练、评估与导出代码
-├── skills/                          # OpenHands 任务规范
+├── openhands/
+│   ├── app_server/mlops_task/       # Agent Harness
+│   └── mlops_loop/                  # Model Loop Engine
+├── workspace/rightArmPerception/
+│   └── rightarm_mlops/              # 手势模型 Adapter
+├── skills/                          # Agent 行动规范
 ├── configs/                         # 非秘密运行配置
+├── containers/model-agent/          # 定制运行镜像
+├── docs/reports/                    # 实验汇总报告
 ├── docker-compose.yml               # OpenHands + Loop Controller
+├── model-agent                      # data/train/full/export/improve 入口
 ├── setup.sh                         # 首次准备
 └── start.sh                         # 一键启动
 ```
