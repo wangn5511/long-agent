@@ -1,0 +1,1166 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>手势模型迭代报告 · run_d6026a6b4e1bc3912b170e98</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0d10;
+      --panel: #12161b;
+      --panel-2: #181d24;
+      --line: #29313b;
+      --text: #f3f6f8;
+      --muted: #98a4b3;
+      --green: #5de2a5;
+      --green-2: #153d31;
+      --amber: #ffc868;
+      --amber-2: #4b3819;
+      --red: #ff7d87;
+      --red-2: #4b2228;
+      --blue: #78b9ff;
+      --blue-2: #183550;
+      --radius: 18px;
+      --shadow: 0 18px 50px rgba(0, 0, 0, .28);
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 15% -10%, rgba(93, 226, 165, .12), transparent 35rem),
+        radial-gradient(circle at 95% 15%, rgba(120, 185, 255, .11), transparent 32rem),
+        var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+        "PingFang SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.55;
+    }
+
+    a { color: inherit; }
+
+    .shell {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      border-bottom: 1px solid rgba(255,255,255,.06);
+      background: rgba(11, 13, 16, .82);
+      backdrop-filter: blur(16px);
+    }
+
+    .topbar .shell {
+      min-height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 750;
+      letter-spacing: -.02em;
+    }
+
+    .brand-mark {
+      width: 32px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      border-radius: 10px;
+      background: linear-gradient(145deg, var(--green), #31a7ff);
+      color: #07100d;
+      font-size: 13px;
+      box-shadow: 0 8px 26px rgba(93, 226, 165, .22);
+    }
+
+    nav {
+      display: flex;
+      gap: 18px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    nav a { text-decoration: none; }
+    nav a:hover { color: var(--text); }
+
+    header.hero {
+      padding: 72px 0 40px;
+    }
+
+    .eyebrow {
+      color: var(--green);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 880px;
+      margin: 14px 0 18px;
+      font-size: clamp(38px, 7vw, 74px);
+      line-height: 1.03;
+      letter-spacing: -.055em;
+    }
+
+    .hero-copy {
+      max-width: 780px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 17px;
+    }
+
+    .run-line {
+      margin-top: 28px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 11px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255,255,255,.035);
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+    }
+
+    .pill.cancelled {
+      border-color: rgba(255, 125, 135, .35);
+      background: var(--red-2);
+      color: #ffd9dc;
+      font-family: inherit;
+      font-weight: 750;
+    }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      margin-bottom: 34px;
+    }
+
+    .metric, .panel {
+      border: 1px solid var(--line);
+      background: linear-gradient(160deg, rgba(255,255,255,.035), transparent 60%), var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .metric {
+      min-height: 142px;
+      padding: 22px;
+      border-radius: var(--radius);
+    }
+
+    .metric-label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+
+    .metric-value {
+      margin-top: 8px;
+      font-size: clamp(28px, 4vw, 42px);
+      font-weight: 790;
+      letter-spacing: -.045em;
+    }
+
+    .metric-note {
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .good { color: var(--green); }
+    .warn { color: var(--amber); }
+    .bad { color: var(--red); }
+
+    section { padding: 30px 0; }
+
+    .section-head {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 18px;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: clamp(25px, 4vw, 38px);
+      letter-spacing: -.035em;
+    }
+
+    .section-subtitle {
+      max-width: 620px;
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .panel {
+      border-radius: var(--radius);
+      padding: 24px;
+    }
+
+    .verdict {
+      display: grid;
+      grid-template-columns: 1.1fr .9fr;
+      gap: 14px;
+    }
+
+    .verdict-main {
+      position: relative;
+      overflow: hidden;
+      min-height: 240px;
+    }
+
+    .verdict-main::after {
+      content: "98.44";
+      position: absolute;
+      right: -4px;
+      bottom: -46px;
+      color: rgba(255,255,255,.035);
+      font-size: 150px;
+      font-weight: 850;
+      line-height: 1;
+      letter-spacing: -.08em;
+      pointer-events: none;
+    }
+
+    .kicker {
+      margin-bottom: 10px;
+      color: var(--green);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    h3 {
+      margin: 0 0 10px;
+      font-size: 20px;
+      letter-spacing: -.02em;
+    }
+
+    p { margin: 0; }
+
+    .body-copy {
+      max-width: 690px;
+      color: #cad1d9;
+      font-size: 15px;
+    }
+
+    .root-cause {
+      background: linear-gradient(145deg, rgba(255,125,135,.08), transparent 65%), var(--panel);
+    }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .error-code {
+      display: block;
+      margin: 15px 0;
+      padding: 13px 14px;
+      overflow-wrap: anywhere;
+      border: 1px solid rgba(255,125,135,.25);
+      border-radius: 12px;
+      background: rgba(0,0,0,.24);
+      color: #ffd1d5;
+      font-size: 12px;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    .dataset-numbers {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    .mini {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: rgba(255,255,255,.025);
+    }
+
+    .mini strong {
+      display: block;
+      font-size: 24px;
+      letter-spacing: -.035em;
+    }
+
+    .mini span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .repair {
+      display: flex;
+      gap: 14px;
+      align-items: flex-start;
+      margin-top: 18px;
+      padding: 15px;
+      border: 1px solid rgba(93,226,165,.18);
+      border-radius: 13px;
+      background: rgba(93,226,165,.06);
+    }
+
+    .repair-icon {
+      flex: 0 0 auto;
+      width: 28px;
+      height: 28px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--green-2);
+      color: var(--green);
+      font-weight: 800;
+    }
+
+    .label-cloud {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+    .label-cloud span {
+      padding: 6px 9px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      color: #cbd4dd;
+      background: rgba(255,255,255,.025);
+      font-size: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    button {
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel-2);
+      color: var(--muted);
+      cursor: pointer;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    button:hover, button.active {
+      border-color: rgba(93,226,165,.45);
+      color: var(--text);
+      background: var(--green-2);
+    }
+
+    .tab-panel[hidden] { display: none; }
+
+    .class-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .class-row {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255,255,255,.02);
+    }
+
+    .class-top {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 9px;
+    }
+
+    .class-name {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      font-weight: 760;
+    }
+
+    .class-score {
+      font-size: 13px;
+      font-weight: 760;
+    }
+
+    .bar {
+      height: 6px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #272e37;
+    }
+
+    .bar > span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #2db87c, var(--green));
+    }
+
+    .class-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .matrix-wrap {
+      overflow: auto;
+      padding-bottom: 4px;
+    }
+
+    .matrix {
+      width: 100%;
+      min-width: 900px;
+      border-collapse: separate;
+      border-spacing: 3px;
+      font-size: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .matrix th {
+      padding: 5px;
+      color: var(--muted);
+      font-weight: 650;
+      white-space: nowrap;
+    }
+
+    .matrix td {
+      min-width: 42px;
+      height: 38px;
+      border: 1px solid rgba(255,255,255,.035);
+      border-radius: 7px;
+      text-align: center;
+    }
+
+    .matrix th:first-child {
+      position: sticky;
+      left: 0;
+      z-index: 2;
+      background: var(--panel);
+      text-align: right;
+    }
+
+    .matrix-note {
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .trial-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .trial {
+      display: grid;
+      grid-template-columns: 64px minmax(0, 1fr) 170px;
+      gap: 18px;
+      align-items: center;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: rgba(255,255,255,.022);
+      transition: transform .15s ease, border-color .15s ease;
+    }
+
+    .trial:hover {
+      transform: translateY(-1px);
+      border-color: #3a4654;
+    }
+
+    .trial-index {
+      width: 48px;
+      height: 48px;
+      display: grid;
+      place-items: center;
+      border-radius: 14px;
+      background: var(--panel-2);
+      color: var(--muted);
+      font-weight: 820;
+      font-size: 18px;
+    }
+
+    .trial-title {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 9px;
+      align-items: center;
+      margin-bottom: 7px;
+    }
+
+    .trial-title strong { font-size: 16px; }
+
+    .tag {
+      padding: 4px 7px;
+      border-radius: 7px;
+      background: var(--blue-2);
+      color: #b9dcff;
+      font-size: 10px;
+      font-weight: 750;
+      letter-spacing: .03em;
+    }
+
+    .trial-params {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 16px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .trial-result {
+      justify-self: stretch;
+      padding-left: 18px;
+      border-left: 1px solid var(--line);
+    }
+
+    .trial-result strong {
+      display: block;
+      color: var(--red);
+      font-size: 13px;
+    }
+
+    .trial-result span {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .progress {
+      height: 5px;
+      margin-top: 9px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #272e37;
+    }
+
+    .progress span {
+      display: block;
+      width: 1%;
+      height: 100%;
+      background: var(--red);
+    }
+
+    .timeline {
+      position: relative;
+      display: grid;
+      gap: 0;
+      margin-top: 4px;
+    }
+
+    .timeline::before {
+      content: "";
+      position: absolute;
+      top: 15px;
+      bottom: 15px;
+      left: 91px;
+      width: 1px;
+      background: var(--line);
+    }
+
+    .event {
+      position: relative;
+      display: grid;
+      grid-template-columns: 72px 20px minmax(0, 1fr);
+      gap: 10px;
+      padding: 10px 0;
+    }
+
+    .event time {
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 11px;
+      text-align: right;
+    }
+
+    .event-dot {
+      z-index: 1;
+      width: 9px;
+      height: 9px;
+      margin: 4px auto 0;
+      border: 2px solid var(--panel);
+      border-radius: 50%;
+      background: var(--blue);
+      box-shadow: 0 0 0 2px var(--blue-2);
+    }
+
+    .event.success .event-dot {
+      background: var(--green);
+      box-shadow: 0 0 0 2px var(--green-2);
+    }
+
+    .event.failure .event-dot,
+    .event.cancel .event-dot {
+      background: var(--red);
+      box-shadow: 0 0 0 2px var(--red-2);
+    }
+
+    .event-copy strong {
+      display: block;
+      font-size: 13px;
+    }
+
+    .event-copy span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .artifacts {
+      display: grid;
+      gap: 10px;
+    }
+
+    .artifact {
+      display: grid;
+      grid-template-columns: 170px minmax(0, 1fr);
+      gap: 12px;
+      padding: 13px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .artifact:last-child { border-bottom: 0; }
+
+    .artifact-label {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .artifact code {
+      overflow-wrap: anywhere;
+      color: #d6dde5;
+      font-size: 11px;
+    }
+
+    footer {
+      padding: 42px 0 64px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    @media (max-width: 900px) {
+      .metrics { grid-template-columns: repeat(2, 1fr); }
+      .verdict, .grid-2 { grid-template-columns: 1fr; }
+      .trial { grid-template-columns: 54px minmax(0, 1fr); }
+      .trial-result {
+        grid-column: 2;
+        padding: 10px 0 0;
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }
+    }
+
+    @media (max-width: 640px) {
+      nav { display: none; }
+      header.hero { padding-top: 48px; }
+      .metrics, .class-grid { grid-template-columns: 1fr; }
+      .dataset-numbers { grid-template-columns: 1fr; }
+      .section-head { align-items: flex-start; flex-direction: column; }
+      .trial { grid-template-columns: 1fr; }
+      .trial-result { grid-column: 1; }
+      .artifact { grid-template-columns: 1fr; gap: 3px; }
+      .timeline::before { left: 70px; }
+      .event { grid-template-columns: 52px 16px minmax(0, 1fr); }
+    }
+
+    @media print {
+      :root { color-scheme: light; }
+      body { background: white; color: #161a1f; }
+      .topbar { position: static; background: white; }
+      .panel, .metric, .trial { box-shadow: none; break-inside: avoid; }
+      nav, .controls { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="shell">
+      <div class="brand">
+        <div class="brand-mark">MA</div>
+        <span>Model Agent · Experiment Report</span>
+      </div>
+      <nav aria-label="报告导航">
+        <a href="#summary">结论</a>
+        <a href="#dataset">数据</a>
+        <a href="#baseline">基线</a>
+        <a href="#trials">迭代</a>
+        <a href="#timeline">时间线</a>
+      </nav>
+    </div>
+  </div>
+
+  <main class="shell">
+    <header class="hero">
+      <div class="eyebrow">Gesture Recognition · 11 Classes</div>
+      <h1>一次没有产生新冠军，<br>但定位了明确阻塞点的迭代。</h1>
+      <p class="hero-copy">
+        本报告汇总数据准备、基线评测、四次 8 卡训练尝试、错误分析与最终状态。
+        所有 Challenger 均在首轮训练结束后的分布式验证阶段失败，因此没有可与基线公平比较的新指标。
+      </p>
+      <div class="run-line">
+        <span class="pill cancelled"><span class="dot"></span>CANCELLED</span>
+        <span class="pill">run_d6026a6b4e1bc3912b170e98</span>
+        <span class="pill">2026-07-23 21:17 → 2026-07-24 11:04 CST</span>
+      </div>
+    </header>
+
+    <div class="metrics" aria-label="关键指标">
+      <article class="metric">
+        <div class="metric-label">Baseline accuracy</div>
+        <div class="metric-value good">98.44%</div>
+        <div class="metric-note">1,536 条验证样本</div>
+      </article>
+      <article class="metric">
+        <div class="metric-label">Macro F1</div>
+        <div class="metric-value good">98.48%</div>
+        <div class="metric-note">11 个类别等权平均</div>
+      </article>
+      <article class="metric">
+        <div class="metric-label">Weakest recall</div>
+        <div class="metric-value warn">91.36%</div>
+        <div class="metric-note">CURSOR：7 条被判为 NONE</div>
+      </article>
+      <article class="metric">
+        <div class="metric-label">Valid challengers</div>
+        <div class="metric-value bad">0 / 4</div>
+        <div class="metric-note">均在 Epoch 1 验证阶段中止</div>
+      </article>
+    </div>
+
+    <section id="summary">
+      <div class="section-head">
+        <div>
+          <h2>运行结论</h2>
+          <p class="section-subtitle">区分模型表现问题与基础设施问题，避免把“没跑完”误判成“模型退步”。</p>
+        </div>
+      </div>
+      <div class="verdict">
+        <article class="panel verdict-main">
+          <div class="kicker">Verified result</div>
+          <h3>基线仍然是本次 Run 的最佳有效模型</h3>
+          <p class="body-copy">
+            原 checkpoint 在修复后的 11 类数据集上完成了完整验证，Accuracy 为 98.4375%，
+            Macro-F1 为 98.4828%。最明显的改进空间集中在 CURSOR 与 NONE 的边界，而不是全局类别崩坏。
+          </p>
+        </article>
+        <article class="panel root-cause">
+          <div class="kicker bad">Blocking root cause</div>
+          <h3>训练完成首个 Epoch，验证临时目录不可写</h3>
+          <code class="error-code">OSError: [Errno 30] Read-only file system: '.dist_test'</code>
+          <p class="body-copy">
+            四次尝试的失败点完全一致：MMEngine 在汇总分布式验证结果时尝试在只读工作目录创建
+            <code>.dist_test</code>。这是执行环境问题，不是超参数或模型策略造成的失败。
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section id="dataset">
+      <div class="section-head">
+        <div>
+          <h2>数据与完整性</h2>
+          <p class="section-subtitle">输入 PKL 保持不变；训练使用一份带审计记录的修复副本。</p>
+        </div>
+      </div>
+      <div class="grid-2">
+        <article class="panel">
+          <div class="kicker">Dataset profile</div>
+          <h3>15,720 条标注 · 11 类</h3>
+          <div class="dataset-numbers">
+            <div class="mini"><strong>14,184</strong><span>Train</span></div>
+            <div class="mini"><strong>1,536</strong><span>Validation</span></div>
+            <div class="mini"><strong>0</strong><span>未解析视频路径</span></div>
+          </div>
+          <div class="repair">
+            <div class="repair-icon">✓</div>
+            <div>
+              <strong>自动修复 1 条视频路径</strong>
+              <div class="metric-note">NONE7 样本的结束帧文件名由 01897 校正为实际存在的 01896。</div>
+            </div>
+          </div>
+        </article>
+        <article class="panel">
+          <div class="kicker">Class inventory</div>
+          <h3>评测类别</h3>
+          <div class="label-cloud" aria-label="类别列表">
+            <span>WAVE_IN</span><span>WAVE_OUT</span><span>FIVE</span>
+            <span>CLICK</span><span>ROTATE</span><span>SLIDE_DOWN</span>
+            <span>SLIDE_UP</span><span>OK</span><span>CURSOR</span>
+            <span>GUN</span><span>NONE</span>
+          </div>
+          <div class="artifact" style="margin-top:18px">
+            <div class="artifact-label">修复后数据 SHA-256</div>
+            <code>d3c31fa6a5adb4c3658fe08d8db1c7c5d342a6da8c96826bfe0459049724a8d6</code>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section id="baseline">
+      <div class="section-head">
+        <div>
+          <h2>基线评测</h2>
+          <p class="section-subtitle">逐类召回率能比单一 Accuracy 更直接地暴露下一轮应优先解决的错误。</p>
+        </div>
+        <div class="controls" role="tablist" aria-label="基线视图">
+          <button class="active" data-tab="class-view" role="tab">逐类指标</button>
+          <button data-tab="matrix-view" role="tab">混淆矩阵</button>
+        </div>
+      </div>
+
+      <div id="class-view" class="panel tab-panel" role="tabpanel">
+        <div id="class-grid" class="class-grid"></div>
+      </div>
+
+      <div id="matrix-view" class="panel tab-panel" role="tabpanel" hidden>
+        <div class="matrix-wrap">
+          <table class="matrix" id="matrix-table" aria-label="混淆矩阵"></table>
+        </div>
+        <p class="matrix-note">行是真实类别，列是预测类别。颜色越亮表示样本数越多；对角线外的数字是误分类。</p>
+      </div>
+    </section>
+
+    <section id="trials">
+      <div class="section-head">
+        <div>
+          <h2>训练迭代</h2>
+          <p class="section-subtitle">四种方向都真实启动了 8 卡训练，但尚未进入可比较的验证闭环。</p>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="trial-list">
+          <article class="trial">
+            <div class="trial-index">01</div>
+            <div>
+              <div class="trial-title"><strong>提高 Gesture Gate 约束</strong><span class="tag">gesture-gate</span></div>
+              <div class="trial-params">
+                <span>LR 1e-4</span><span>Gate 0.60</span><span>Gate loss 1.0</span>
+                <span>Standard aug</span><span>Seed 42</span><span>8 GPUs</span>
+              </div>
+              <div class="metric-note"><code>job_016beddd5ce20bf22f777e41</code></div>
+            </div>
+            <div class="trial-result">
+              <strong>无有效评测</strong>
+              <span>完成 Epoch 1 / 100 后验证失败</span>
+              <div class="progress"><span></span></div>
+            </div>
+          </article>
+
+          <article class="trial">
+            <div class="trial-index">02</div>
+            <div>
+              <div class="trial-title"><strong>增强数据扰动</strong><span class="tag">augmentation</span></div>
+              <div class="trial-params">
+                <span>LR 1e-4</span><span>Gate 0.50</span><span>Strong aug</span>
+                <span>Standard motion</span><span>Seed 43</span><span>8 GPUs</span>
+              </div>
+              <div class="metric-note"><code>job_89fb83518f5a24c4c0667b53</code></div>
+            </div>
+            <div class="trial-result">
+              <strong>无有效评测</strong>
+              <span>完成 Epoch 1 / 100 后验证失败</span>
+              <div class="progress"><span></span></div>
+            </div>
+          </article>
+
+          <article class="trial">
+            <div class="trial-index">03</div>
+            <div>
+              <div class="trial-title"><strong>运动特征消融</strong><span class="tag">motion-ablation</span></div>
+              <div class="trial-params">
+                <span>LR 1e-4</span><span>Gate 0.50</span><span>No delta-Z</span>
+                <span>Standard aug</span><span>Seed 44</span><span>8 GPUs</span>
+              </div>
+              <div class="metric-note"><code>job_b65648adac6ad09a3004c537</code></div>
+            </div>
+            <div class="trial-result">
+              <strong>无有效评测</strong>
+              <span>完成 Epoch 1 / 100 后验证失败</span>
+              <div class="progress"><span></span></div>
+            </div>
+          </article>
+
+          <article class="trial">
+            <div class="trial-index">04</div>
+            <div>
+              <div class="trial-title"><strong>降低学习率微调</strong><span class="tag">fine-tune</span></div>
+              <div class="trial-params">
+                <span>LR 1e-5</span><span>Gate 0.50</span><span>Standard aug</span>
+                <span>Standard motion</span><span>Seed 45</span><span>8 GPUs</span>
+              </div>
+              <div class="metric-note"><code>job_f54131b67df050f47e7a89b6</code></div>
+            </div>
+            <div class="trial-result">
+              <strong>无有效评测</strong>
+              <span>完成 Epoch 1 / 100 后验证失败</span>
+              <div class="progress"><span></span></div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="timeline">
+      <div class="section-head">
+        <div>
+          <h2>审计时间线</h2>
+          <p class="section-subtitle">时间均为 Asia/Shanghai；保留失败记录是为了让下一次 Run 不重复踩坑。</p>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="timeline">
+          <div class="event">
+            <time>21:17</time><span class="event-dot"></span>
+            <div class="event-copy"><strong>Run 创建</strong><span>导入修复后的 PKL 与现有 checkpoint，进入 improve 模式。</span></div>
+          </div>
+          <div class="event">
+            <time>21:21</time><span class="event-dot"></span>
+            <div class="event-copy"><strong>运行准备问题 1</strong><span>离线环境触发预训练权重下载；调整为使用 checkpoint 内完整权重。</span></div>
+          </div>
+          <div class="event">
+            <time>21:31</time><span class="event-dot"></span>
+            <div class="event-copy"><strong>运行准备问题 2</strong><span>受控输入 materialize 后丢失 .pkl 后缀；建立只读别名。</span></div>
+          </div>
+          <div class="event">
+            <time>21:42</time><span class="event-dot"></span>
+            <div class="event-copy"><strong>运行准备问题 3</strong><span>确定性 CUDA 缺少 CUBLAS_WORKSPACE_CONFIG；补齐执行环境。</span></div>
+          </div>
+          <div class="event success">
+            <time>22:05</time><span class="event-dot"></span>
+            <div class="event-copy"><strong>基线评测完成</strong><span>Accuracy 98.44%，Macro-F1 98.48%，得到完整混淆矩阵。</span></div>
+          </div>
+          <div class="event failure">
+            <time>22:06</time><span class="event-dot"></span>
+            <div class="event-copy"><strong>Trial 1 启动</strong><span>8 卡完成首个 Epoch，验证时因 .dist_test 不可写失败。</span></div>
+          </div>
+          <div class="event failure">
+            <time>22:27</time><span class="event-dot"></span>
+            <div class="event-copy"><strong>Trial 2 启动</strong><span>切换强增强策略；复现同一验证环境错误。</span></div>
+          </div>
+          <div class="event failure">
+            <time>22:49</time><span class="event-dot"></span>
+            <div class="event-copy"><strong>Trial 3 启动</strong><span>切换运动消融策略；复现同一验证环境错误。</span></div>
+          </div>
+          <div class="event failure">
+            <time>23:10</time><span class="event-dot"></span>
+            <div class="event-copy"><strong>Trial 4 启动</strong><span>降低学习率；复现同一验证环境错误。</span></div>
+          </div>
+          <div class="event failure">
+            <time>23:32</time><span class="event-dot"></span>
+            <div class="event-copy"><strong>结果被拒绝</strong><span>没有任何 Challenger 完成有效评测，Run 进入 NEEDS_INTERVENTION。</span></div>
+          </div>
+          <div class="event cancel">
+            <time>次日 11:04</time><span class="event-dot"></span>
+            <div class="event-copy"><strong>用户终止 Run</strong><span>正式写入 RunCancelled 事件，状态收口为 CANCELLED。</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <div>
+          <h2>建议的下一步</h2>
+          <p class="section-subtitle">这里记录的是技术判断，不代表已执行。</p>
+        </div>
+      </div>
+      <div class="grid-2">
+        <article class="panel">
+          <div class="kicker">Fix before retraining</div>
+          <h3>先修复验证临时目录</h3>
+          <p class="body-copy">
+            把分布式结果汇总目录显式设置到可写的 <code>/mlops-output/.dist_test</code>，
+            并增加一个 1 Epoch 的 8 卡 train→val 冒烟测试。它通过以后，再启动 100 Epoch 搜索。
+          </p>
+        </article>
+        <article class="panel">
+          <div class="kicker">Model direction</div>
+          <h3>优先研究 CURSOR → NONE</h3>
+          <p class="body-copy">
+            基线中 CURSOR 的 81 条样本有 7 条被判为 NONE，是最集中的可解释误差。
+            下一轮应先查看这 7 条的动作幅度、时序长度与 gate 分数，再决定调阈值还是补困难样本。
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <div>
+          <h2>原始产物</h2>
+          <p class="section-subtitle">本 HTML 是汇总视图，原始 JSON 与日志仍是审计依据。</p>
+        </div>
+      </div>
+      <div class="panel artifacts">
+        <div class="artifact">
+          <div class="artifact-label">基线评测</div>
+          <code>/home/wangning/.model-agent/wangning/mlops/jobs/job_b7768cf2414616421bd6461f/output/evaluation/checkpoint-evaluation.json</code>
+        </div>
+        <div class="artifact">
+          <div class="artifact-label">数据修复报告</div>
+          <code>/home/wangning/.model-agent/wangning/prepared-inputs/rtm_add_20260717_none_np124.model-agent-repair.json</code>
+        </div>
+        <div class="artifact">
+          <div class="artifact-label">Trial 1 日志</div>
+          <code>/home/wangning/.model-agent/wangning/mlops/jobs/job_016beddd5ce20bf22f777e41/output/job.log</code>
+        </div>
+        <div class="artifact">
+          <div class="artifact-label">Trial 2 日志</div>
+          <code>/home/wangning/.model-agent/wangning/mlops/jobs/job_89fb83518f5a24c4c0667b53/output/job.log</code>
+        </div>
+        <div class="artifact">
+          <div class="artifact-label">Trial 3 日志</div>
+          <code>/home/wangning/.model-agent/wangning/mlops/jobs/job_b65648adac6ad09a3004c537/output/job.log</code>
+        </div>
+        <div class="artifact">
+          <div class="artifact-label">Trial 4 日志</div>
+          <code>/home/wangning/.model-agent/wangning/mlops/jobs/job_f54131b67df050f47e7a89b6/output/job.log</code>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="shell">
+    生成于 2026-07-24 · 单文件离线报告 · 数据来源：Model Agent ledger、评测 JSON 与训练日志
+  </footer>
+
+  <script>
+    const labels = [
+      "WAVE_IN", "WAVE_OUT", "FIVE", "CLICK", "ROTATE",
+      "SLIDE_DOWN", "SLIDE_UP", "OK", "CURSOR", "GUN", "NONE"
+    ];
+
+    const perClass = {
+      CLICK:      { precision: 1.0000, recall: 0.987179, f1: 0.993548, support: 78 },
+      CURSOR:     { precision: 0.986667, recall: 0.913580, f1: 0.948718, support: 81 },
+      FIVE:       { precision: 1.0000, recall: 0.989583, f1: 0.994764, support: 96 },
+      GUN:        { precision: 1.0000, recall: 0.991736, f1: 0.995851, support: 121 },
+      NONE:       { precision: 0.967509, recall: 0.996283, f1: 0.981685, support: 538 },
+      OK:         { precision: 1.0000, recall: 1.000000, f1: 1.000000, support: 96 },
+      ROTATE:     { precision: 1.0000, recall: 0.958333, f1: 0.978723, support: 96 },
+      SLIDE_DOWN: { precision: 0.989362, recall: 0.978947, f1: 0.984127, support: 95 },
+      SLIDE_UP:   { precision: 0.989474, recall: 0.989474, f1: 0.989474, support: 95 },
+      WAVE_IN:    { precision: 0.984733, recall: 0.984733, f1: 0.984733, support: 131 },
+      WAVE_OUT:   { precision: 0.990654, recall: 0.972477, f1: 0.981481, support: 109 }
+    };
+
+    const confusion = {
+      CLICK:      { CLICK:77, CURSOR:1, FIVE:0, GUN:0, NONE:0, OK:0, ROTATE:0, SLIDE_DOWN:0, SLIDE_UP:0, WAVE_IN:0, WAVE_OUT:0 },
+      CURSOR:     { CLICK:0, CURSOR:74, FIVE:0, GUN:0, NONE:7, OK:0, ROTATE:0, SLIDE_DOWN:0, SLIDE_UP:0, WAVE_IN:0, WAVE_OUT:0 },
+      FIVE:       { CLICK:0, CURSOR:0, FIVE:95, GUN:0, NONE:1, OK:0, ROTATE:0, SLIDE_DOWN:0, SLIDE_UP:0, WAVE_IN:0, WAVE_OUT:0 },
+      GUN:        { CLICK:0, CURSOR:0, FIVE:0, GUN:120, NONE:1, OK:0, ROTATE:0, SLIDE_DOWN:0, SLIDE_UP:0, WAVE_IN:0, WAVE_OUT:0 },
+      NONE:       { CLICK:0, CURSOR:0, FIVE:0, GUN:0, NONE:536, OK:0, ROTATE:0, SLIDE_DOWN:0, SLIDE_UP:0, WAVE_IN:1, WAVE_OUT:1 },
+      OK:         { CLICK:0, CURSOR:0, FIVE:0, GUN:0, NONE:0, OK:96, ROTATE:0, SLIDE_DOWN:0, SLIDE_UP:0, WAVE_IN:0, WAVE_OUT:0 },
+      ROTATE:     { CLICK:0, CURSOR:0, FIVE:0, GUN:0, NONE:3, OK:0, ROTATE:92, SLIDE_DOWN:1, SLIDE_UP:0, WAVE_IN:0, WAVE_OUT:0 },
+      SLIDE_DOWN: { CLICK:0, CURSOR:0, FIVE:0, GUN:0, NONE:1, OK:0, ROTATE:0, SLIDE_DOWN:93, SLIDE_UP:1, WAVE_IN:0, WAVE_OUT:0 },
+      SLIDE_UP:   { CLICK:0, CURSOR:0, FIVE:0, GUN:0, NONE:1, OK:0, ROTATE:0, SLIDE_DOWN:0, SLIDE_UP:94, WAVE_IN:0, WAVE_OUT:0 },
+      WAVE_IN:    { CLICK:0, CURSOR:0, FIVE:0, GUN:0, NONE:2, OK:0, ROTATE:0, SLIDE_DOWN:0, SLIDE_UP:0, WAVE_IN:129, WAVE_OUT:0 },
+      WAVE_OUT:   { CLICK:0, CURSOR:0, FIVE:0, GUN:0, NONE:2, OK:0, ROTATE:0, SLIDE_DOWN:0, SLIDE_UP:0, WAVE_IN:1, WAVE_OUT:106 }
+    };
+
+    const pct = value => `${(value * 100).toFixed(2)}%`;
+
+    const classGrid = document.getElementById("class-grid");
+    Object.entries(perClass)
+      .sort((a, b) => a[1].recall - b[1].recall)
+      .forEach(([name, metric]) => {
+        const row = document.createElement("div");
+        row.className = "class-row";
+        const scoreClass = metric.recall < .95 ? "warn" : "good";
+        row.innerHTML = `
+          <div class="class-top">
+            <span class="class-name">${name}</span>
+            <span class="class-score ${scoreClass}">Recall ${pct(metric.recall)}</span>
+          </div>
+          <div class="bar"><span style="width:${metric.recall * 100}%"></span></div>
+          <div class="class-meta">
+            <span>Precision ${pct(metric.precision)}</span>
+            <span>F1 ${pct(metric.f1)}</span>
+            <span>n=${metric.support}</span>
+          </div>`;
+        classGrid.appendChild(row);
+      });
+
+    const matrixTable = document.getElementById("matrix-table");
+    const head = document.createElement("thead");
+    head.innerHTML = `<tr><th>actual \\ pred</th>${labels.map(label => `<th>${label}</th>`).join("")}</tr>`;
+    matrixTable.appendChild(head);
+
+    const body = document.createElement("tbody");
+    const maxValue = 536;
+    labels.forEach(actual => {
+      const row = document.createElement("tr");
+      row.innerHTML = `<th>${actual}</th>`;
+      labels.forEach(predicted => {
+        const value = confusion[actual][predicted] || 0;
+        const cell = document.createElement("td");
+        const diagonal = actual === predicted;
+        const alpha = value === 0 ? .012 : Math.max(.08, Math.sqrt(value / maxValue) * .72);
+        cell.textContent = value || "·";
+        cell.style.background = diagonal
+          ? `rgba(93, 226, 165, ${alpha})`
+          : `rgba(255, 125, 135, ${Math.min(alpha * 1.7, .65)})`;
+        cell.style.color = value === 0 ? "#59636f" : "#f4f7f9";
+        if (!diagonal && value > 0) cell.title = `${actual} → ${predicted}: ${value}`;
+        row.appendChild(cell);
+      });
+      body.appendChild(row);
+    });
+    matrixTable.appendChild(body);
+
+    document.querySelectorAll("[data-tab]").forEach(button => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll("[data-tab]").forEach(item => item.classList.remove("active"));
+        document.querySelectorAll(".tab-panel").forEach(panel => panel.hidden = true);
+        button.classList.add("active");
+        document.getElementById(button.dataset.tab).hidden = false;
+      });
+    });
+  </script>
+</body>
+</html>
