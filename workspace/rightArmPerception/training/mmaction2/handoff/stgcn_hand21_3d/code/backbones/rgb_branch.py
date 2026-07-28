@@ -13,13 +13,12 @@ Architecture (per the design spec in rgb_stgcn.txt):
     -> rgb_feat: (N, 96)
 """
 
-from typing import Dict, List, Optional, Union
+from typing import Optional
 
 import torch
 import torch.nn as nn
-from mmengine.model import BaseModule
-
 from mmaction.registry import MODELS
+from mmengine.model import BaseModule
 
 
 class _DepthwiseSepConv1dBlock(nn.Module):
@@ -58,19 +57,24 @@ class RGBBranch(BaseModule):
         self,
         proj_channels: int = 96,
         freeze_cnn: bool = True,
-        init_cfg: Optional[Union[Dict, List[Dict]]] = None,
+        pretrained: bool = True,
+        init_cfg: Optional[dict | list[dict]] = None,
     ) -> None:
         super().__init__(init_cfg=init_cfg)
 
-        try:
-            import torchvision.models as tvm
+        import torchvision.models as tvm
 
-            weights = tvm.MobileNet_V3_Small_Weights.IMAGENET1K_V1
-            mobilenet = tvm.mobilenet_v3_small(weights=weights)
-        except Exception:
-            import torchvision.models as tvm
-
-            mobilenet = tvm.mobilenet_v3_small(pretrained=True)
+        if pretrained:
+            try:
+                weights = tvm.MobileNet_V3_Small_Weights.IMAGENET1K_V1
+                mobilenet = tvm.mobilenet_v3_small(weights=weights)
+            except (AttributeError, TypeError):
+                mobilenet = tvm.mobilenet_v3_small(pretrained=True)
+        else:
+            try:
+                mobilenet = tvm.mobilenet_v3_small(weights=None)
+            except TypeError:
+                mobilenet = tvm.mobilenet_v3_small(pretrained=False)
 
         self.cnn = nn.Sequential(*list(mobilenet.features.children())[:6])
 
@@ -91,7 +95,7 @@ class RGBBranch(BaseModule):
             _DepthwiseSepConv1dBlock(proj_channels, dilation=4),
         )
 
-    def train(self, mode: bool = True) -> "RGBBranch":
+    def train(self, mode: bool = True) -> 'RGBBranch':
         super().train(mode)
         if self.freeze_cnn:
             self.cnn.eval()

@@ -12,13 +12,29 @@ from openhands.mlops_loop.models import CompletionContract, MetricGate, TaskSpec
 
 RIGHTARM_REQUIRED_ARTIFACTS: dict[str, list[str]] = {
     'inspect-data': ['source-manifest', 'data-validation-report', 'raw-dataset'],
-    'build-dataset': ['mmaction-dataset', 'dataset-report'],
+    'build-dataset': ['incremental-mmaction-dataset', 'dataset-report'],
+    'review-dataset-distribution': [
+        'dataset-distribution-report',
+        'dataset-merge-plan',
+        'dataset-merge-report',
+        'mmaction-dataset',
+    ],
     'train': [
         'checkpoint',
         'last-checkpoint',
         'training-config',
         'training-log',
         'training-metrics',
+    ],
+    'improve-model': [
+        'baseline-evaluation-report',
+        'checkpoint',
+        'training-config',
+        'training-log',
+        'training-metrics',
+        'evaluation-report',
+        'optimization-trial-report',
+        'model-improvement-report',
     ],
     'evaluate': ['evaluation-report'],
     'package': ['onnx-model', 'rknn-model', 'parity-report'],
@@ -92,21 +108,66 @@ def task_specs_from_documents(
             for metric, gate in run_gates.items()
             if any(metric.startswith(prefix) for prefix in prefixes)
         ]
+        if kind == 'improve-model':
+            max_trials = (
+                run_spec.get('spec', {}).get('optimization', {}).get('maxTrials')
+            )
+            if (
+                not isinstance(max_trials, int)
+                or isinstance(max_trials, bool)
+                or not 1 <= max_trials <= 8
+            ):
+                raise ValueError(
+                    'improve-model requires optimization.maxTrials in [1, 8]'
+                )
+            gates.extend(
+                [
+                    MetricGate(
+                        metric='optimization.trial_count',
+                        op='gte',
+                        value=1,
+                    ),
+                    MetricGate(
+                        metric='optimization.trial_count',
+                        op='lte',
+                        value=max_trials,
+                    ),
+                ]
+            )
         contract = CompletionContract(
             required_artifact_kinds=RIGHTARM_REQUIRED_ARTIFACTS.get(kind, []),
             required_evidence=True,
             gates=gates,
             allow_skip_training=kind == 'inspect-data',
         )
+        objective = (
+            'Compare the trusted baseline and incremental dataset using their '
+            'deterministic distribution reports. Only a green review may execute '
+            'the merge-all-unique policy; otherwise submit status=needs_decision. '
+            'Produce the dataset distribution report, merge plan, merge report, '
+            'and final MMAction dataset required by the completion contract.'
+            if kind == 'review-dataset-distribution'
+            else (
+                'Evaluate the incumbent on the immutable validation split, then '
+                'run a bounded sequence of independently measured training and '
+                'evaluation trials. Diagnose each machine report before choosing '
+                'the next allowlisted change, retain the best policy-compliant '
+                'checkpoint, and stop at the target, patience, or trial budget. '
+                'Produce the complete optimization history and every artifact '
+                'required by the completion contract.'
+                if kind == 'improve-model'
+                else (
+                    f'Complete the {kind} stage for immutable RunSpec '
+                    f'{run_spec["metadata"]["name"]}; produce every artifact and '
+                    'piece of evidence in the completion contract.'
+                )
+            )
+        )
         tasks.append(
             TaskSpec(
                 name=raw['name'],
                 kind=kind,
-                objective=(
-                    f'Complete the {kind} stage for immutable RunSpec '
-                    f'{run_spec["metadata"]["name"]}; produce every artifact and '
-                    'piece of evidence in the completion contract.'
-                ),
+                objective=objective,
                 agent_profile=raw['agentProfile'],
                 validator=raw['validator'],
                 max_attempts=raw['maxAttempts'],

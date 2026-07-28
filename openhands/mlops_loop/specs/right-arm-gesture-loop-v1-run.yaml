@@ -8,6 +8,7 @@ metadata:
     target: rk3588
 spec:
   inputArtifactIds:
+    - <baseline-mmaction-dataset-artifact>
     - <champion-base-model-artifact>
     - <frozen-test-set-artifact>
     - <rtm-detector-artifact>
@@ -36,6 +37,21 @@ spec:
   data:
     contractUri: artifact://contracts/rightarm.gesture.batch/v1
     targetUri: artifact://datasets/rightarm-gesture-11
+    distributionReview:
+      policyVersion: rightarm.gesture.dataset-merge-policy/v1
+      baselineArtifactKind: baseline-mmaction-dataset
+      incrementalArtifactKind: incremental-mmaction-dataset
+      allowedSuccessfulDecision: merge-all-unique
+      thresholds:
+        projectedTrainJsdMax: 0.05
+        maxClassShareDelta: 0.03
+        noneShareDelta: 0.02
+        incrementalToBaselineRatioMax: 0.25
+      invariants:
+        preserveBaselineSplits: true
+        preserveIncrementalGroupSplits: true
+        exactDuplicatesPreferBaseline: true
+        conflictingLabels: hard-fail
     validationCommand: >-
       rightarm-mlops build-dataset
       --raw-dataset "$MLOPS_RAW_DATASET"

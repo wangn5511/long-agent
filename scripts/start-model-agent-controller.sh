@@ -54,18 +54,38 @@ fi
 case "${MLOPS_EXECUTOR}" in
   local)
     ;;
-  docker)
-    : "${MLOPS_DOCKER_IMAGE_CATALOG:?required when MLOPS_EXECUTOR=docker}"
+  docker|hybrid)
+    : "${MLOPS_DOCKER_IMAGE_CATALOG:?required when MLOPS_EXECUTOR is docker or hybrid}"
     args+=(--docker-image-catalog "${MLOPS_DOCKER_IMAGE_CATALOG}")
+    if [[ -n "${MLOPS_DOCKER_HOST_JOB_ROOT:-}" ]]; then
+      : "${MLOPS_DOCKER_HOST_WORKSPACE:?required with MLOPS_DOCKER_HOST_JOB_ROOT}"
+      args+=(
+        --docker-host-job-root "${MLOPS_DOCKER_HOST_JOB_ROOT}"
+        --docker-host-workspace "${MLOPS_DOCKER_HOST_WORKSPACE}"
+      )
+    elif [[ -n "${MLOPS_DOCKER_HOST_WORKSPACE:-}" ]]; then
+      echo "MLOPS_DOCKER_HOST_JOB_ROOT is required with MLOPS_DOCKER_HOST_WORKSPACE" >&2
+      exit 1
+    fi
     if [[ -n "${MLOPS_DOCKER_SOURCE_ROOT:-}" ]]; then
       args+=(--docker-source-root "${MLOPS_DOCKER_SOURCE_ROOT}")
     fi
     if [[ -n "${MLOPS_TRAIN_GPU_COUNT:-}" ]]; then
-      args+=(--docker-gpu-count "train=${MLOPS_TRAIN_GPU_COUNT}")
+      for gpu_job_kind in train benchmark-checkpoint train-eval-trial; do
+        args+=(
+          --docker-gpu-count
+          "${gpu_job_kind}=${MLOPS_TRAIN_GPU_COUNT}"
+        )
+      done
+    fi
+    if [[ "${MLOPS_EXECUTOR}" == "hybrid" ]]; then
+      for docker_job_kind in train benchmark-checkpoint train-eval-trial; do
+        args+=(--docker-job-kind "${docker_job_kind}")
+      done
     fi
     ;;
   *)
-    echo "MLOPS_EXECUTOR must be local or docker" >&2
+    echo "MLOPS_EXECUTOR must be local, docker, or hybrid" >&2
     exit 1
     ;;
 esac
@@ -102,6 +122,7 @@ case "${MLOPS_TRIGGER_MODE}" in
 esac
 
 replacement_names=(
+  baseline-mmaction-dataset-artifact
   champion-base-model-artifact
   frozen-test-set-artifact
   rtm-detector-artifact

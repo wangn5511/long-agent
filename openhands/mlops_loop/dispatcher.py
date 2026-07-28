@@ -5,23 +5,44 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Protocol
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 import httpx
 
 from openhands.mlops_loop.models import TaskContext, TaskSpec
+
+DEFAULT_ACTION_NORM_PATH = (
+    Path(__file__).resolve().parents[2]
+    / 'skills'
+    / 'agentic-mlops-task-agent'
+    / 'SKILL.md'
+)
+MAX_ACTION_NORM_BYTES = 64 * 1024
 
 
 class ConversationDispatcher(Protocol):
     def dispatch(
         self, *, context: TaskContext, task: TaskSpec, dispatch_key: str
     ) -> str:
-        """Return a stable conversation id for ``dispatch_key``."""
+        """Create, but do not run, a Conversation for ``dispatch_key``."""
+
+    def start(self, *, conversation_id: str, dispatch_key: str) -> None:
+        """Idempotently start a previously created Conversation."""
 
 
 def conversation_id_for_dispatch(dispatch_key: str) -> str:
     return str(uuid5(NAMESPACE_URL, dispatch_key))
+
+
+def _same_conversation_id(actual: object, expected: object) -> bool:
+    """Compare UUIDs independently of dashed versus hex serialization."""
+
+    try:
+        return UUID(str(actual)) == UUID(str(expected))
+    except (ValueError, AttributeError, TypeError):
+        return False
 
 
 class InMemoryConversationDispatcher:
@@ -29,6 +50,7 @@ class InMemoryConversationDispatcher:
 
     def __init__(self):
         self.conversations: dict[str, tuple[str, TaskContext]] = {}
+        self.started_dispatches: set[str] = set()
 
     def dispatch(
         self, *, context: TaskContext, task: TaskSpec, dispatch_key: str
@@ -40,9 +62,15 @@ class InMemoryConversationDispatcher:
         self.conversations[dispatch_key] = (conversation_id, context)
         return conversation_id
 
+    def start(self, *, conversation_id: str, dispatch_key: str) -> None:
+        conversation = self.conversations.get(dispatch_key)
+        if conversation is None or conversation[0] != conversation_id:
+            raise RuntimeError('cannot start an unknown dispatched Conversation')
+        self.started_dispatches.add(dispatch_key)
+
 
 class OpenHandsHTTPDispatcher:
-    """Start an actual OpenHands conversation and wait for its stable id."""
+    """Create and explicitly start actual OpenHands Conversations in two phases."""
 
     def __init__(
         self,
@@ -53,6 +81,7 @@ class OpenHandsHTTPDispatcher:
         branch: str | None = None,
         plugin_source: str | None = None,
         task_mcp_url: str | None = None,
+        action_norm_path: str | Path | None = DEFAULT_ACTION_NORM_PATH,
         timeout_seconds: float = 120,
         client_factory: Callable[..., httpx.Client] = httpx.Client,
     ):
@@ -61,10 +90,53 @@ class OpenHandsHTTPDispatcher:
         self.branch = branch
         self.plugin_source = plugin_source
         self.task_mcp_url = task_mcp_url
+        self.action_norm_path = (
+            Path(action_norm_path) if action_norm_path is not None else None
+        )
         self.timeout_seconds = timeout_seconds
         self._headers = {'Authorization': f'Bearer {token}'} if token else {}
         self._client_factory = client_factory
         self._dispatches: dict[str, str] = {}
+        self._started_dispatches: set[str] = set()
+
+    def _read_action_norm(self) -> str:
+        if self.action_norm_path is None:
+            return ''
+        value = self.action_norm_path.read_text(encoding='utf-8').strip()
+        if not value:
+            raise ValueError('MLOps action norm must not be empty')
+        if len(value.encode('utf-8')) > MAX_ACTION_NORM_BYTES:
+            raise ValueError(f'MLOps action norm exceeds {MAX_ACTION_NORM_BYTES} bytes')
+        return value
+
+    @staticmethod
+    def _lookup_conversation(
+        client: httpx.Client, requested_conversation_id: object
+    ) -> dict[str, object] | None:
+        # OpenHands exposes conversation lookup through its batch endpoint.
+        # The SPA fallback also returns HTTP 200 for unknown singular paths,
+        # so checking /app-conversations/{id} by status code alone can
+        # incorrectly treat an HTML page as an existing Conversation.
+        existing_response = client.get(
+            '/api/v1/app-conversations',
+            params=[('ids', str(requested_conversation_id))],
+        )
+        existing_response.raise_for_status()
+        existing_values = existing_response.json()
+        if not isinstance(existing_values, list) or len(existing_values) != 1:
+            raise RuntimeError(
+                'OpenHands returned an invalid conversation lookup response'
+            )
+        existing_conversation = existing_values[0]
+        if existing_conversation is None:
+            return None
+        if not isinstance(existing_conversation, dict) or not _same_conversation_id(
+            existing_conversation.get('id'), requested_conversation_id
+        ):
+            raise RuntimeError(
+                'OpenHands returned a mismatched conversation lookup response'
+            )
+        return existing_conversation
 
     def dispatch(
         self, *, context: TaskContext, task: TaskSpec, dispatch_key: str
@@ -78,6 +150,7 @@ class OpenHandsHTTPDispatcher:
             'mlopsattempt': str(context.attempt_number),
             'mlopsprotocol': 'v1',
         }
+        action_norm = self._read_action_norm()
         initial_text = (
             'You are one task Agent inside an MLOps outer loop. Work only on '
             'this attempt. Call the mlopstask MCP tools with the attempt_id and '
@@ -89,6 +162,11 @@ class OpenHandsHTTPDispatcher:
             'inspect-batch and land-batch; never request cloud credentials. '
             'A prose success claim has no effect. You cannot advance Run, '
             'Release, Deployment, retry, or rollback state.\n\n'
+            'The operator-maintained action norm below is authoritative for '
+            'this attempt. Follow it exactly. New Conversations load the '
+            'current checked-in SKILL.md, so this norm may be updated without '
+            'changing dispatcher code.\n\n'
+            f'<action_norm>\n{action_norm}\n</action_norm>\n\n'
             f'```json\n{context.model_dump_json(indent=2)}\n```'
         )
         body: dict[str, object] = {
@@ -98,6 +176,9 @@ class OpenHandsHTTPDispatcher:
             'initial_message': {
                 'role': 'user',
                 'content': [{'type': 'text', 'text': initial_text}],
+                # The controller must durably mark the attempt RUNNING before
+                # the Agent can call any lease-fenced MCP tool.
+                'run': False,
             },
             'selected_repository': self.repository,
             'selected_branch': self.branch,
@@ -116,14 +197,12 @@ class OpenHandsHTTPDispatcher:
             base_url=self.base_url, headers=self._headers, timeout=30
         ) as client:
             requested_conversation_id = body['conversation_id']
-            existing_response = client.get(
-                f'/api/v1/app-conversations/{requested_conversation_id}'
+            existing_conversation = self._lookup_conversation(
+                client, requested_conversation_id
             )
-            if existing_response.status_code == 200:
+            if existing_conversation is not None:
                 self._dispatches[dispatch_key] = str(requested_conversation_id)
                 return str(requested_conversation_id)
-            if existing_response.status_code != 404:
-                existing_response.raise_for_status()
             response = client.post('/api/v1/app-conversations', json=body)
             response.raise_for_status()
             start_task = response.json()
@@ -135,8 +214,14 @@ class OpenHandsHTTPDispatcher:
                         raise RuntimeError(
                             'OpenHands READY response has no conversation id'
                         )
-                    self._dispatches[dispatch_key] = conversation_id
-                    return conversation_id
+                    if not _same_conversation_id(
+                        conversation_id, requested_conversation_id
+                    ):
+                        raise RuntimeError(
+                            'OpenHands returned a mismatched READY conversation id'
+                        )
+                    self._dispatches[dispatch_key] = str(requested_conversation_id)
+                    return str(requested_conversation_id)
                 if start_task.get('status') == 'ERROR':
                     raise RuntimeError(
                         f'OpenHands conversation failed to start: '
@@ -157,3 +242,51 @@ class OpenHandsHTTPDispatcher:
         raise TimeoutError(
             f'OpenHands conversation start timed out: {json.dumps(start_task)}'
         )
+
+    def start(self, *, conversation_id: str, dispatch_key: str) -> None:
+        """Start only after the outer loop has linked the Conversation.
+
+        A retry first consults OpenHands' durable execution status. Any status
+        other than ``idle`` proves that a prior start was accepted (or that the
+        Conversation is no longer safe to start), so it must not append another
+        start message.
+        """
+
+        if dispatch_key in self._started_dispatches:
+            return
+        expected_conversation_id = conversation_id_for_dispatch(dispatch_key)
+        if not _same_conversation_id(conversation_id, expected_conversation_id):
+            raise RuntimeError('cannot start a mismatched dispatched Conversation')
+        with self._client_factory(
+            base_url=self.base_url, headers=self._headers, timeout=30
+        ) as client:
+            conversation = self._lookup_conversation(client, conversation_id)
+            if conversation is None:
+                raise RuntimeError('cannot start an unknown dispatched Conversation')
+            execution_status = conversation.get('execution_status')
+            if not isinstance(execution_status, str):
+                raise RuntimeError(
+                    'OpenHands Conversation has no durable execution status'
+                )
+            if execution_status != 'idle':
+                self._started_dispatches.add(dispatch_key)
+                return
+            response = client.post(
+                f'/api/v1/app-conversations/{conversation_id}/send-message',
+                json={
+                    'role': 'user',
+                    'content': [
+                        {
+                            'type': 'text',
+                            'text': (
+                                'Start this task now. Follow the immediately '
+                                'preceding action norm and immutable TaskContext; '
+                                'first call mlops_get_task_context.'
+                            ),
+                        }
+                    ],
+                    'run': True,
+                },
+            )
+            response.raise_for_status()
+        self._started_dispatches.add(dispatch_key)

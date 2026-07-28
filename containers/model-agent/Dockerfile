@@ -1,6 +1,9 @@
 ARG BASE_IMAGE=model-agent-openhands-base:local
 FROM ${BASE_IMAGE}
 
+ARG MODEL_AGENT_SOURCE_SHA=unknown
+LABEL org.openai.model-agent.source-sha=${MODEL_AGENT_SOURCE_SHA}
+
 USER root
 
 # The base image includes tmux for the OpenHands process runtime and the Docker

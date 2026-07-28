@@ -1,0 +1,64 @@
+apiVersion: mlops.openhands.dev/v1
+kind: MLOpsRun
+metadata:
+  name: rightarm-gesture-bounded-improvement
+  labels:
+    loop: rightarm-gesture-improve-v1
+    model: rgb-gated-stgcn
+    target: rk3588
+spec:
+  objective: >-
+    Re-evaluate the incumbent model on an immutable validation split, run a
+    bounded sequence of auditable training and evaluation trials, diagnose the
+    measured errors between trials, and retain the best policy-compliant model.
+  training:
+    repository: /workspace/rightArmPerception
+    revision: 41eddabba3516521bf0538afd57ef37da23097a1
+    config: training/mmaction2/handoff/stgcn_hand21_3d/configs/stgcn_hand21-rgb-bs64-gated-v3-ft-rtm_add-11cls.py
+    image: model-agent-runtime:configured-training
+    resources:
+      cpu: 32
+      memory: 128Gi
+      gpu: 1
+    environment:
+      MLOPS_LABEL_ONTOLOGY: rightarm-gesture-11/v1
+      MLOPS_SEED: "42"
+  evaluation:
+    image: model-agent-runtime:configured-evaluation
+    immutableSplit: val
+    primaryMetric: offline.macro_f1
+    guardrails:
+      - metric: offline.min_per_class_recall_delta_vs_baseline
+        op: gte
+        value: -0.02
+      - metric: offline.none_false_accept_rate
+        op: lte
+        value: 0.01
+  optimization:
+    policyVersion: rightarm.gesture.model-improvement-policy/v1
+    trialJobKind: train-eval-trial
+    maxTrials: 4
+    patience: 2
+    targetMacroF1Delta: 0.002
+    minImprovement: 0.0005
+    maxEpochs: 50
+    batchSize: 32
+    workers: 12
+    gpus: 1
+    allowedChangeFamilies:
+      - fine-tune
+      - optimizer
+      - regularization
+      - augmentation
+      - motion-ablation
+      - gesture-gate
+    stopReasons:
+      - target-reached
+      - patience-exhausted
+      - trial-budget-exhausted
+  policy:
+    autonomy: bounded-experimentation
+    maxAttemptsPerLogicalJob: 2
+    maxRunCostUsd: 300
+    maxRunDurationSeconds: 259200
+    maxArtifactBytes: 1099511627776

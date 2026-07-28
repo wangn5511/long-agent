@@ -6,8 +6,11 @@ import pytest
 from fastmcp import Client
 
 from openhands.app_server.mlops_task.mcp_server import (
+    TASK_JOB_KINDS,
     DockerJobManager,
     LocalJobManager,
+    _fresh_poll_observation,
+    _observe_job_until_terminal,
     create_gateway_mcp_server,
 )
 from openhands.mlops_loop.artifact_store import LocalArtifactStore, sha256_file
@@ -24,6 +27,48 @@ from openhands.mlops_loop.models import (
 )
 from openhands.mlops_loop.retry_policy import RetryPolicy
 from openhands.mlops_loop.validators import ContractValidator, ValidatorRegistry
+
+
+def test_job_poll_observations_are_distinct_without_changing_job_state():
+    first = _fresh_poll_observation({'job_id': 'job-1', 'status': 'running'})
+    second = _fresh_poll_observation({'job_id': 'job-1', 'status': 'running'})
+
+    assert first['job_id'] == second['job_id'] == 'job-1'
+    assert first['status'] == second['status'] == 'running'
+    assert first['poll_observation_id'] != second['poll_observation_id']
+
+
+def test_terminal_job_observation_remains_stable():
+    terminal = {'job_id': 'job-1', 'status': 'succeeded'}
+
+    assert _fresh_poll_observation(terminal) is terminal
+
+
+def test_job_observation_long_poll_returns_as_soon_as_job_is_terminal():
+    class SequencedJobManager:
+        def __init__(self):
+            self.calls = 0
+
+        def observe(self, job_id, *, owner_attempt_id):
+            assert job_id == 'job-1'
+            assert owner_attempt_id == 'attempt-1'
+            self.calls += 1
+            return {
+                'job_id': job_id,
+                'status': 'running' if self.calls < 3 else 'succeeded',
+            }
+
+    manager = SequencedJobManager()
+    observation = _observe_job_until_terminal(
+        manager,
+        'job-1',
+        owner_attempt_id='attempt-1',
+        max_wait_seconds=1,
+        max_poll_interval_seconds=0.001,
+    )
+
+    assert observation['status'] == 'succeeded'
+    assert manager.calls == 3
 
 
 def test_artifact_store_accepts_encoded_staging_uri(tmp_path: Path):
@@ -140,6 +185,37 @@ def test_local_job_manager_rejects_executable_and_external_wrapper_bypasses(
         manager.launch(
             ['rightarm-mlops', 'export-onnx'], idempotency_key='external-command'
         )
+
+
+def test_distribution_review_task_has_only_profile_and_merge_capabilities():
+    assert TASK_JOB_KINDS['review-dataset-distribution'] == frozenset(
+        {'profile-dataset-distribution', 'merge-dataset'}
+    )
+    assert 'train' not in TASK_JOB_KINDS['review-dataset-distribution']
+    assert 'deploy' not in TASK_JOB_KINDS['review-dataset-distribution']
+    assert {
+        'profile-dataset-distribution',
+        'merge-dataset',
+    }.issubset(LocalJobManager.SAFE_JOB_KINDS)
+
+
+def test_model_improvement_task_has_only_bounded_experiment_capabilities():
+    allowed = frozenset(
+        {
+            'benchmark-checkpoint',
+            'train-eval-trial',
+            'record-model-improvement',
+        }
+    )
+    assert TASK_JOB_KINDS['improve-model'] == allowed
+    assert {
+        'train',
+        'evaluate',
+        'export-onnx',
+        'deploy',
+        'build-release',
+    }.isdisjoint(TASK_JOB_KINDS['improve-model'])
+    assert allowed.issubset(LocalJobManager.SAFE_JOB_KINDS)
 
 
 class _FakeContainer:
@@ -308,6 +384,62 @@ def test_docker_job_manager_requires_digest_and_enforces_sandbox(tmp_path: Path)
     )
 
 
+@pytest.mark.parametrize(
+    'kind',
+    ['benchmark-checkpoint', 'train-eval-trial'],
+)
+def test_model_improvement_gpu_jobs_require_operator_owned_gpu_count(
+    tmp_path: Path, kind: str
+):
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    client = _FakeDockerClient()
+    image = 'rightarm@sha256:' + 'a' * 64
+    manager = DockerJobManager(
+        tmp_path / 'jobs',
+        workspace,
+        image_catalog={kind: image},
+        gpu_counts={kind: 2},
+        client=client,
+    )
+    argv = ['rightarm-mlops', kind, '--gpus', '1']
+    with pytest.raises(ValueError, match='operator-owned Docker GPU count'):
+        manager.launch(argv, f'{kind}-wrong-gpus', owner_attempt_id='attempt-1')
+
+    argv[3] = '2'
+    launched = manager.launch(argv, f'{kind}-right-gpus', owner_attempt_id='attempt-1')
+
+    assert launched['status'] == 'running'
+    request = client.containers.run_requests[0]
+    assert request['network_disabled'] is True
+    assert request['read_only'] is True
+    assert request['device_requests'][0].count == 2
+
+
+def test_model_improvement_record_job_does_not_require_or_receive_gpu(
+    tmp_path: Path,
+):
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    client = _FakeDockerClient()
+    manager = DockerJobManager(
+        tmp_path / 'jobs',
+        workspace,
+        image_catalog={'record-model-improvement': 'rightarm@sha256:' + 'a' * 64},
+        client=client,
+    )
+
+    launched = manager.launch(
+        ['rightarm-mlops', 'record-model-improvement'],
+        'record-improvement',
+        owner_attempt_id='attempt-1',
+    )
+
+    assert launched['status'] == 'running'
+    request = client.containers.run_requests[0]
+    assert 'device_requests' not in request
+
+
 def test_artifact_staging_requires_declared_job_output_kind_and_hash(tmp_path: Path):
     workspace = tmp_path / 'workspace'
     workspace.mkdir()
@@ -342,6 +474,164 @@ def test_artifact_staging_requires_declared_job_output_kind_and_hash(tmp_path: P
     output.write_bytes(b'tampered')
     with pytest.raises(PermissionError, match='changed after'):
         manager.assert_declared_output(output, 'attempt-1', 'onnx-model')
+
+
+def test_structured_job_outputs_are_bounded_fenced_and_grouped_by_kind(
+    tmp_path: Path,
+):
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    manager = LocalJobManager(tmp_path / 'jobs', workspace)
+    job_id = 'job_' + 'a' * 24
+    job_dir = manager.root / job_id
+    output_dir = job_dir / 'output'
+    output_dir.mkdir(parents=True)
+    (job_dir / 'request.json').write_text(json.dumps({'owner_attempt_id': 'attempt-1'}))
+
+    def declared(kind: str, path: Path) -> dict[str, object]:
+        digest, size = sha256_file(path)
+        return {
+            'kind': kind,
+            'path': str(path),
+            'sha256': digest,
+            'size_bytes': size,
+        }
+
+    baseline = output_dir / 'baseline.json'
+    baseline.write_text(json.dumps({'per_class': {'NONE': {'recall': 0.75}}}))
+    evaluation = output_dir / 'evaluation.json'
+    evaluation.write_text(json.dumps({'confusion_matrix': [[3, 1], [0, 4]]}))
+    trial = output_dir / 'trial.json'
+    trial.write_text(json.dumps({'trial_number': 1, 'decision': 'promote'}))
+    tampered = output_dir / 'tampered.json'
+    tampered.write_text(json.dumps({'trusted': True}))
+    invalid = output_dir / 'invalid.json'
+    invalid.write_text('{')
+    json_in_text_file = output_dir / 'report.txt'
+    json_in_text_file.write_text(json.dumps({'must_not': 'be inferred as JSON'}))
+    oversized = output_dir / 'oversized.json'
+    oversized.write_text(
+        json.dumps({'padding': 'x' * manager.MAX_STRUCTURED_OUTPUT_BYTES})
+    )
+    outside = tmp_path / 'outside.json'
+    outside.write_text(json.dumps({'secret': True}))
+
+    other_job_dir = manager.root / ('job_' + 'b' * 24)
+    other_output_dir = other_job_dir / 'output'
+    other_output_dir.mkdir(parents=True)
+    (other_job_dir / 'request.json').write_text(
+        json.dumps({'owner_attempt_id': 'attempt-1'})
+    )
+    other_report = other_output_dir / 'other.json'
+    other_report.write_text(json.dumps({'other_job': True}))
+
+    outputs = [
+        declared('evaluation-report', baseline),
+        declared('evaluation-report', evaluation),
+        declared('optimization-trial-report', trial),
+        declared('tampered-report', tampered),
+        declared('invalid-report', invalid),
+        declared('text-report', json_in_text_file),
+        declared('oversized-report', oversized),
+        declared('outside-report', outside),
+        declared('other-job-report', other_report),
+    ]
+    result = {
+        'protocol': 'rightarm.mlops.job-result/v1',
+        'status': 'succeeded',
+        'outputs': outputs,
+    }
+    (output_dir / 'result.json').write_text(json.dumps(result))
+    tampered.write_text(json.dumps({'trusted': False}))
+    observation = {'status': 'succeeded', 'result': result}
+
+    structured = manager.read_structured_outputs(
+        job_id,
+        observation,
+        'attempt-1',
+    )
+
+    assert structured == {
+        'evaluation-report': [
+            {'per_class': {'NONE': {'recall': 0.75}}},
+            {'confusion_matrix': [[3, 1], [0, 4]]},
+        ],
+        'optimization-trial-report': [{'trial_number': 1, 'decision': 'promote'}],
+    }
+    assert (
+        manager.read_structured_outputs(
+            job_id,
+            {**observation, 'status': 'failed'},
+            'attempt-1',
+        )
+        == {}
+    )
+    assert manager.read_structured_outputs(job_id, observation, 'attempt-2') == {}
+
+
+def test_structured_job_output_count_limits_fail_closed(tmp_path: Path):
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    manager = LocalJobManager(tmp_path / 'jobs', workspace)
+    job_id = 'job_' + 'c' * 24
+    job_dir = manager.root / job_id
+    output_dir = job_dir / 'output'
+    output_dir.mkdir(parents=True)
+    (job_dir / 'request.json').write_text(json.dumps({'owner_attempt_id': 'attempt-1'}))
+
+    outputs = []
+    for index in range(manager.MAX_STRUCTURED_OUTPUTS + 1):
+        path = output_dir / f'report-{index}.json'
+        path.write_text(json.dumps({'index': index}))
+        digest, size = sha256_file(path)
+        outputs.append(
+            {
+                'kind': 'evaluation-report',
+                'path': str(path),
+                'sha256': digest,
+                'size_bytes': size,
+            }
+        )
+    result = {
+        'protocol': 'rightarm.mlops.job-result/v1',
+        'status': 'succeeded',
+        'outputs': outputs,
+    }
+    (output_dir / 'result.json').write_text(json.dumps(result))
+
+    structured = manager.read_structured_outputs(
+        job_id,
+        {'status': 'succeeded', 'result': result},
+        'attempt-1',
+    )
+
+    assert [item['index'] for item in structured['evaluation-report']] == list(
+        range(manager.MAX_STRUCTURED_OUTPUTS)
+    )
+
+    manager.MAX_STRUCTURED_OUTPUT_TOTAL_BYTES = sum(
+        item['size_bytes'] for item in outputs[:2]
+    )
+    structured = manager.read_structured_outputs(
+        job_id,
+        {'status': 'succeeded', 'result': result},
+        'attempt-1',
+    )
+    assert [item['index'] for item in structured['evaluation-report']] == [0, 1]
+
+    result['outputs'] = [
+        {'kind': 'ignored', 'path': 'ignored', 'size_bytes': 0}
+        for _ in range(manager.MAX_STRUCTURED_OUTPUT_DECLARATIONS + 1)
+    ]
+    (output_dir / 'result.json').write_text(json.dumps(result))
+    assert (
+        manager.read_structured_outputs(
+            job_id,
+            {'status': 'succeeded', 'result': result},
+            'attempt-1',
+        )
+        == {}
+    )
 
 
 def test_enabled_external_job_still_requires_checked_in_script(tmp_path: Path):
@@ -696,3 +986,196 @@ output.mkdir(parents=True, exist_ok=True)
     assert job_events[0] == 'JobAttemptRequested'
     assert job_events[-1] == 'JobAttemptObserved'
     assert set(job_events[1:]) == {'JobAttemptObserved'}
+
+
+@pytest.mark.asyncio
+async def test_shared_gateway_inlines_declared_machine_json_reports(tmp_path: Path):
+    ledger = SQLiteLedger(tmp_path / 'ledger.db')
+    artifacts = LocalArtifactStore(tmp_path / 'cas')
+    controller = LoopController(
+        ledger=ledger,
+        artifact_store=artifacts,
+        dispatcher=InMemoryConversationDispatcher(),
+        validators=ValidatorRegistry(ContractValidator(artifacts)),
+        retry_policy=RetryPolicy(frozenset()),
+    )
+    run = controller.create_run(
+        loop_id='gesture-loop',
+        watermark='structured-job-observation',
+        run_spec={'source': {'uri': 'file:///dataset.pkl'}},
+        tasks=[
+            TaskSpec(
+                name='improve-model',
+                kind='improve-model',
+                objective='inspect machine-readable evaluation reports',
+                agent_profile='profile',
+                validator='validator',
+                max_attempts=1,
+                timeout_seconds=60,
+                completion_contract=CompletionContract(),
+            )
+        ],
+    )
+    controller.dispatch_current_task(run['id'])
+    attempt = ledger.list_attempts(run['id'])[0]
+    lease = ledger.get_lease(attempt['id'])
+    workspace = tmp_path / 'workspace'
+    package = workspace / 'rightarm_mlops'
+    package.mkdir(parents=True)
+    (package / '__init__.py').write_text('')
+    (package / '__main__.py').write_text(
+        """
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+output = Path(sys.argv[sys.argv.index('--output-dir') + 1])
+output.mkdir(parents=True, exist_ok=True)
+reports = [
+    ('evaluation-report', 'baseline.json', {
+        'per_class': {'NONE': {'recall': 0.8}},
+        'confusion_matrix': [[8, 2], [1, 9]],
+    }),
+    ('optimization-trial-report', 'trial.json', {
+        'trial_number': 1,
+        'decision': 'promote',
+    }),
+]
+declared = []
+for kind, filename, value in reports:
+    path = output / filename
+    path.write_text(json.dumps(value))
+    payload = path.read_bytes()
+    declared.append({
+        'kind': kind,
+        'path': str(path.resolve()),
+        'sha256': hashlib.sha256(payload).hexdigest(),
+        'size_bytes': len(payload),
+    })
+(output / 'result.json').write_text(json.dumps({
+    'protocol': 'rightarm.mlops.job-result/v1',
+    'status': 'succeeded',
+    'outputs': declared,
+}))
+"""
+    )
+    gateway = create_gateway_mcp_server(
+        controller=controller,
+        job_manager=LocalJobManager(tmp_path / 'jobs', workspace),
+    )
+
+    async with Client(gateway) as client:
+        launched = await client.call_tool(
+            'mlops_launch_job',
+            {
+                'attempt_id': attempt['id'],
+                'lease_id': lease['lease_id'],
+                'argv': ['rightarm-mlops', 'benchmark-checkpoint'],
+                'idempotency_key': 'benchmark-v1',
+            },
+        )
+        for _ in range(100):
+            observed = await client.call_tool(
+                'mlops_observe_job',
+                {
+                    'attempt_id': attempt['id'],
+                    'lease_id': lease['lease_id'],
+                    'job_id': launched.data['job_id'],
+                },
+            )
+            if observed.data['status'] == 'succeeded':
+                break
+            time.sleep(0.01)
+
+    assert observed.data['structured_outputs'] == {
+        'evaluation-report': [
+            {
+                'per_class': {'NONE': {'recall': 0.8}},
+                'confusion_matrix': [[8, 2], [1, 9]],
+            }
+        ],
+        'optimization-trial-report': [{'trial_number': 1, 'decision': 'promote'}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_gateway_exposes_only_sanitized_controlled_launch_errors(tmp_path: Path):
+    class ErrorJobManager(LocalJobManager):
+        def launch(
+            self,
+            argv: list[str],
+            idempotency_key: str,
+            *,
+            owner_attempt_id: str | None = None,
+        ):
+            del argv, owner_attempt_id
+            if idempotency_key.endswith(':controlled'):
+                raise ValueError(
+                    'benchmark-checkpoint job requires an integer --gpus value; '
+                    'token=sk-this-must-not-leak'
+                )
+            raise RuntimeError('unexpected executor failure sk-also-must-not-leak')
+
+    ledger = SQLiteLedger(tmp_path / 'ledger.db')
+    artifacts = LocalArtifactStore(tmp_path / 'cas')
+    controller = LoopController(
+        ledger=ledger,
+        artifact_store=artifacts,
+        dispatcher=InMemoryConversationDispatcher(),
+        validators=ValidatorRegistry(ContractValidator(artifacts)),
+        retry_policy=RetryPolicy(frozenset()),
+    )
+    run = controller.create_run(
+        loop_id='gesture-loop',
+        watermark='gateway-error-masking',
+        run_spec={'source': {'uri': 'file:///dataset.pkl'}},
+        tasks=[
+            TaskSpec(
+                name='improve-model',
+                kind='improve-model',
+                objective='run a bounded model experiment',
+                agent_profile='profile',
+                validator='validator',
+                max_attempts=1,
+                timeout_seconds=60,
+                completion_contract=CompletionContract(),
+            )
+        ],
+    )
+    controller.dispatch_current_task(run['id'])
+    attempt = ledger.list_attempts(run['id'])[0]
+    lease = ledger.get_lease(attempt['id'])
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    gateway = create_gateway_mcp_server(
+        controller=controller,
+        job_manager=ErrorJobManager(tmp_path / 'jobs', workspace),
+    )
+    base_request = {
+        'attempt_id': attempt['id'],
+        'lease_id': lease['lease_id'],
+        'argv': ['rightarm-mlops', 'benchmark-checkpoint'],
+    }
+
+    async with Client(gateway) as client:
+        controlled = await client.call_tool(
+            'mlops_launch_job',
+            {**base_request, 'idempotency_key': 'controlled'},
+            raise_on_error=False,
+        )
+        unexpected = await client.call_tool(
+            'mlops_launch_job',
+            {**base_request, 'idempotency_key': 'unexpected'},
+            raise_on_error=False,
+        )
+
+    controlled_text = str(controlled.content)
+    unexpected_text = str(unexpected.content)
+    assert controlled.is_error
+    assert 'requires an integer --gpus value' in controlled_text
+    assert '[REDACTED]' in controlled_text
+    assert 'sk-this-must-not-leak' not in controlled_text
+    assert unexpected.is_error
+    assert "Error calling tool 'mlops_launch_job'" in unexpected_text
+    assert 'sk-also-must-not-leak' not in unexpected_text

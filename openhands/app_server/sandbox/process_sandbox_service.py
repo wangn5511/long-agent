@@ -42,9 +42,6 @@ from openhands.app_server.sandbox.sandbox_spec_service import (
     resolve_sandbox_spec,
 )
 from openhands.app_server.services.injector import InjectorState
-from openhands.app_server.utils.docker_utils import (
-    replace_localhost_hostname_for_docker,
-)
 
 _logger = logging.getLogger(__name__)
 
@@ -167,9 +164,11 @@ class ProcessSandboxService(SandboxService):
         start_time = time.time()
         while time.time() - start_time < timeout:
             try:
-                url = replace_localhost_hostname_for_docker(
-                    f'http://localhost:{port}/alive'
-                )
+                # A process sandbox is a child of this App Server process,
+                # including when the App Server itself runs in Docker. Its port
+                # is therefore always reached over this network namespace's
+                # loopback interface, not through host.docker.internal.
+                url = f'http://127.0.0.1:{port}/alive'
                 response = await self.httpx_client.get(url, timeout=5.0)
                 if response.status_code == 200:
                     data = response.json()
@@ -210,15 +209,17 @@ class ProcessSandboxService(SandboxService):
         if status == SandboxStatus.RUNNING:
             # Check if server is actually responding
             try:
-                url = replace_localhost_hostname_for_docker(
-                    f'http://localhost:{process_info.port}{self.health_check_path}'
-                )
+                url = f'http://127.0.0.1:{process_info.port}{self.health_check_path}'
                 response = await self.httpx_client.get(url, timeout=5.0)
                 if response.status_code == 200:
                     exposed_urls = [
                         ExposedUrl(
                             name=AGENT_SERVER,
-                            url=f'http://localhost:{process_info.port}',
+                            # Keep process sandboxes on loopback. Using the
+                            # "localhost" spelling would be rewritten to
+                            # host.docker.internal by shared sandbox helpers
+                            # whenever the App Server itself runs in Docker.
+                            url=f'http://127.0.0.1:{process_info.port}',
                             port=process_info.port,
                         ),
                     ]

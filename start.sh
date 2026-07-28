@@ -17,17 +17,43 @@ compose=(
   --file "${MODEL_AGENT_ROOT_DIR}/docker-compose.yml"
 )
 
+controller_storage_ready() {
+  "${compose[@]}" exec -T loop-controller /app/.venv/bin/python -c '
+import os
+import tempfile
+from pathlib import Path
+
+for raw in (
+    "/var/lib/rightarm-mlops/imports",
+    "/var/lib/rightarm-mlops/cas/staging",
+    "/var/lib/rightarm-mlops/cas/objects",
+    "/var/lib/rightarm-mlops/jobs",
+):
+    directory = Path(raw)
+    if not directory.is_dir():
+        raise SystemExit(f"missing runtime directory: {directory}")
+    descriptor, probe = tempfile.mkstemp(prefix=".readiness-", dir=str(directory))
+    try:
+        os.write(descriptor, b"ready")
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+        Path(probe).unlink(missing_ok=True)
+' >/dev/null 2>&1
+}
+
 "${compose[@]}" up -d
 
-openhands_ready=0
-controller_ready=0
 for _ in $(seq 1 90); do
+  openhands_ready=0
+  controller_ready=0
   if curl --fail --silent --max-time 2 \
     "http://127.0.0.1:${OPENHANDS_PORT}/ready" | grep --quiet 'OK'; then
     openhands_ready=1
   fi
-  if curl --fail --silent --max-time 2 \
-    "http://127.0.0.1:${MLOPS_PORT}/openapi.json" >/dev/null; then
+  if "${MODEL_AGENT_ROOT_DIR}/model-agent" status \
+    --limit 1 --timeout 2 --json >/dev/null 2>&1 \
+    && controller_storage_ready; then
     controller_ready=1
   fi
   if ((openhands_ready && controller_ready)); then

@@ -31,6 +31,12 @@ spec:
       validator: rightarm-dataset-v1
       maxAttempts: 3
       timeoutSeconds: 43200
+    - name: review-dataset-distribution
+      kind: review-dataset-distribution
+      agentProfile: default
+      validator: rightarm-dataset-distribution-review-v1
+      maxAttempts: 2
+      timeoutSeconds: 3600
     - name: train-challenger
       kind: train
       agentProfile: default

@@ -5,16 +5,19 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import docker
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 
 from openhands.app_server.mlops_task.client import MLOpsTaskClient
 from openhands.mlops_loop.models import ArtifactRef, LineageProposal, TaskResult
@@ -22,6 +25,16 @@ from openhands.mlops_loop.models import ArtifactRef, LineageProposal, TaskResult
 TASK_JOB_KINDS: dict[str, frozenset[str]] = {
     'inspect-data': frozenset({'materialize-cos', 'inspect-batch', 'land-batch'}),
     'build-dataset': frozenset({'build-dataset'}),
+    'review-dataset-distribution': frozenset(
+        {'profile-dataset-distribution', 'merge-dataset'}
+    ),
+    'improve-model': frozenset(
+        {
+            'benchmark-checkpoint',
+            'train-eval-trial',
+            'record-model-improvement',
+        }
+    ),
     'train': frozenset({'train'}),
     'evaluate': frozenset({'run-evaluation', 'evaluate'}),
     'package': frozenset(
@@ -33,9 +46,66 @@ TASK_JOB_KINDS: dict[str, frozenset[str]] = {
     'rollback': frozenset({'rollback'}),
 }
 
+_SENSITIVE_ERROR_VALUE = re.compile(
+    r'(?i)\b(?:sk-[a-z0-9_-]{8,}|bearer\s+\S+|'
+    r'(?:api[_-]?key|token|authorization)\s*[:=]\s*\S+)'
+)
+
+
+def _controlled_gateway_tool_error(exc: ValueError | PermissionError) -> ToolError:
+    """Expose an actionable bounded message without disabling global masking."""
+
+    message = str(exc).strip() or type(exc).__name__
+    message = _SENSITIVE_ERROR_VALUE.sub('[REDACTED]', message)
+    return ToolError(message[:500])
+
+
+def _reject_nonfinite_json_constant(value: str) -> Any:
+    raise ValueError(f'invalid JSON constant: {value}')
+
+
+def _fresh_poll_observation(observation: dict[str, Any]) -> dict[str, Any]:
+    """Keep legitimate long-running job polls distinct to the Agent runtime."""
+
+    if observation.get('status') != 'running':
+        return observation
+    return {
+        **observation,
+        'poll_observation_id': f'poll:{uuid4().hex}',
+    }
+
+
+def _observe_job_until_terminal(
+    job_manager: Any,
+    job_id: str,
+    *,
+    owner_attempt_id: str,
+    max_wait_seconds: float = 240.0,
+    max_poll_interval_seconds: float = 15.0,
+) -> dict[str, Any]:
+    """Bound one Agent iteration around a long-running executor job."""
+
+    deadline = time.monotonic() + max_wait_seconds
+    delay = min(1.0, max_poll_interval_seconds)
+    observation = job_manager.observe(job_id, owner_attempt_id=owner_attempt_id)
+    while observation.get('status') == 'running':
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(delay, remaining))
+        observation = job_manager.observe(job_id, owner_attempt_id=owner_attempt_id)
+        delay = min(max(delay * 2, 0.001), max_poll_interval_seconds)
+    return observation
+
 
 class LocalJobManager:
     """Run allowlisted rightarm jobs without a shell and observe them by id."""
+
+    MAX_STRUCTURED_OUTPUT_DECLARATIONS = 32
+    MAX_STRUCTURED_OUTPUTS = 16
+    MAX_STRUCTURED_OUTPUT_BYTES = 256 * 1024
+    MAX_STRUCTURED_OUTPUT_TOTAL_BYTES = 1024 * 1024
+    SAFE_STRUCTURED_OUTPUT_KIND = re.compile(r'[a-z0-9][a-z0-9._-]{0,127}\Z')
 
     SAFE_JOB_KINDS = frozenset(
         {
@@ -43,6 +113,11 @@ class LocalJobManager:
             'materialize-cos',
             'land-batch',
             'build-dataset',
+            'profile-dataset-distribution',
+            'merge-dataset',
+            'benchmark-checkpoint',
+            'train-eval-trial',
+            'record-model-improvement',
             'train',
             'evaluate',
             'build-release',
@@ -326,7 +401,11 @@ class LocalJobManager:
         with self._lock:
             for job_dir in sorted(self.root.glob('job_*')):
                 request = self._read_optional_json(job_dir / 'request.json')
-                if request is None or request.get('owner_attempt_id') != attempt_id:
+                if (
+                    request is None
+                    or not self._owns_request(request)
+                    or request.get('owner_attempt_id') != attempt_id
+                ):
                     continue
                 job_id = request['job_id']
                 observation = self.observe(job_id, owner_attempt_id=attempt_id)
@@ -360,8 +439,10 @@ class LocalJobManager:
         with self._lock:
             for job_dir in sorted(self.root.glob('job_*')):
                 request = self._read_optional_json(job_dir / 'request.json')
-                if request is None or not isinstance(
-                    request.get('owner_attempt_id'), str
+                if (
+                    request is None
+                    or not self._owns_request(request)
+                    or not isinstance(request.get('owner_attempt_id'), str)
                 ):
                     continue
                 owner = request['owner_attempt_id']
@@ -423,6 +504,90 @@ class LocalJobManager:
             raise PermissionError('declared job output changed after job completion')
         return source
 
+    def read_structured_outputs(
+        self,
+        job_id: str,
+        observation: dict[str, Any],
+        attempt_id: str,
+    ) -> dict[str, list[Any]]:
+        """Read bounded JSON outputs declared by this successful fenced job.
+
+        Output paths remain untrusted. Every included file must be inside the
+        observed job's managed output directory and pass the same declaration,
+        ownership, size, and digest checks used for artifact staging.
+        """
+
+        result = observation.get('result')
+        if (
+            observation.get('status') != 'succeeded'
+            or not isinstance(result, dict)
+            or result.get('protocol') != 'rightarm.mlops.job-result/v1'
+            or result.get('status') != 'succeeded'
+        ):
+            return {}
+        outputs = result.get('outputs')
+        if (
+            not isinstance(outputs, list)
+            or len(outputs) > self.MAX_STRUCTURED_OUTPUT_DECLARATIONS
+        ):
+            return {}
+        job_dir = (self.root / job_id).resolve()
+        if job_dir.parent != self.root or job_dir.name != job_id:
+            return {}
+
+        structured: dict[str, list[Any]] = {}
+        output_count = 0
+        total_size = 0
+        for item in outputs:
+            if output_count >= self.MAX_STRUCTURED_OUTPUTS:
+                break
+            if not isinstance(item, dict):
+                continue
+            kind = item.get('kind')
+            path = item.get('path')
+            declared_size = item.get('size_bytes')
+            if (
+                not isinstance(kind, str)
+                or self.SAFE_STRUCTURED_OUTPUT_KIND.fullmatch(kind) is None
+                or not isinstance(path, str)
+                or Path(path).suffix.casefold() != '.json'
+                or type(declared_size) is not int
+                or declared_size < 0
+                or declared_size > self.MAX_STRUCTURED_OUTPUT_BYTES
+                or total_size + declared_size > self.MAX_STRUCTURED_OUTPUT_TOTAL_BYTES
+            ):
+                continue
+            try:
+                source = self.assert_owned_output(path, attempt_id)
+                relative = source.relative_to(self.root)
+                if relative.parts[0] != job_id:
+                    continue
+                if source.stat().st_size != declared_size:
+                    continue
+                source = self.assert_declared_output(source, attempt_id, kind)
+                with source.open('rb') as stream:
+                    payload = stream.read(self.MAX_STRUCTURED_OUTPUT_BYTES + 1)
+                if len(payload) != declared_size:
+                    continue
+                parsed = json.loads(
+                    payload.decode('utf-8'),
+                    parse_constant=_reject_nonfinite_json_constant,
+                )
+            except (
+                json.JSONDecodeError,
+                OSError,
+                PermissionError,
+                RecursionError,
+                RuntimeError,
+                UnicodeDecodeError,
+                ValueError,
+            ):
+                continue
+            structured.setdefault(kind, []).append(parsed)
+            output_count += 1
+            total_size += declared_size
+        return structured
+
     @staticmethod
     def _declared_output_host_path(job_dir: Path, declared: str) -> Path:
         return Path(declared).resolve()
@@ -446,6 +611,24 @@ class LocalJobManager:
         if materialized.resolve() != expected:
             raise PermissionError('materialized input is outside its managed path')
         return str(materialized)
+
+    def execution_input_path_for_task(
+        self,
+        task_kind: str,
+        attempt_id: str,
+        artifact: ArtifactRef,
+        materialized: Path,
+    ) -> str:
+        """Return an input path for the executor selected for this task."""
+
+        del task_kind
+        return self.execution_input_path(attempt_id, artifact, materialized)
+
+    @staticmethod
+    def _owns_request(request: dict[str, Any]) -> bool:
+        """Whether this manager owns a request in a shared hybrid job root."""
+
+        return request.get('executor') != 'docker'
 
     @staticmethod
     def _hash_file(path: Path) -> tuple[str, int]:
@@ -512,6 +695,8 @@ class LocalJobManager:
 class DockerJobManager(LocalJobManager):
     """Run each allowlisted attempt job in a separately fenced container."""
 
+    GPU_JOB_KINDS = frozenset({'train', 'benchmark-checkpoint', 'train-eval-trial'})
+
     def __init__(
         self,
         root: str | Path,
@@ -520,6 +705,8 @@ class DockerJobManager(LocalJobManager):
         image_catalog: dict[str, str],
         allow_external_jobs: bool = False,
         external_job_catalog: dict[str, list[str]] | None = None,
+        host_root: str | Path | None = None,
+        host_workspace: str | Path | None = None,
         read_only_source_roots: list[str | Path] | None = None,
         networked_job_kinds: set[str] | None = None,
         gpu_counts: dict[str, int] | None = None,
@@ -548,8 +735,17 @@ class DockerJobManager(LocalJobManager):
                 raise ValueError(
                     f'Docker image for {kind!r} must be pinned by sha256 digest'
                 )
+        self.host_root = self._absolute_operator_path(
+            host_root if host_root is not None else self.root,
+            label='Docker host job root',
+        )
+        self.host_workspace = self._absolute_operator_path(
+            host_workspace if host_workspace is not None else self.workspace,
+            label='Docker host workspace',
+        )
         self.read_only_source_roots = [
-            Path(value).resolve(strict=True) for value in read_only_source_roots or []
+            self._absolute_operator_path(value, label='Docker source root')
+            for value in read_only_source_roots or []
         ]
         self.networked_job_kinds = set(networked_job_kinds or set())
         self.gpu_counts = dict(gpu_counts or {})
@@ -576,6 +772,34 @@ class DockerJobManager(LocalJobManager):
         self.nano_cpus = nano_cpus
         self.client = client or docker.from_env()
 
+    @staticmethod
+    def _absolute_operator_path(
+        value: str | Path,
+        *,
+        label: str,
+    ) -> Path:
+        """Normalize an operator-owned host path without resolving symlinks.
+
+        Docker resolves bind sources on the host, not inside the controller
+        container. Keeping the requested absolute target also preserves paths
+        embedded in dataset indexes, such as ``/home/results/...``.
+        """
+
+        path = Path(value)
+        if not path.is_absolute():
+            raise ValueError(f'{label} must be absolute')
+        return Path(os.path.abspath(os.path.normpath(str(path))))
+
+    def _host_job_path(self, controller_path: Path) -> Path:
+        resolved = controller_path.resolve()
+        if not resolved.is_relative_to(self.root):
+            raise PermissionError('Docker job path escaped the managed job root')
+        return self.host_root / resolved.relative_to(self.root)
+
+    @staticmethod
+    def _owns_request(request: dict[str, Any]) -> bool:
+        return request.get('executor') == 'docker'
+
     def launch(
         self,
         argv: list[str],
@@ -594,15 +818,17 @@ class DockerJobManager(LocalJobManager):
         if image is None:
             raise ValueError(f'Docker image catalog has no image for {kind!r}')
         gpu_count = self.gpu_counts.get(kind)
-        if kind == 'train':
+        if kind in self.GPU_JOB_KINDS:
             try:
                 requested_gpus = int(argv[argv.index('--gpus') + 1])
             except (ValueError, IndexError) as exc:
-                raise ValueError('train job requires an integer --gpus value') from exc
+                raise ValueError(
+                    f'{kind} job requires an integer --gpus value'
+                ) from exc
             if gpu_count is None or requested_gpus != gpu_count:
                 raise ValueError(
-                    'train --gpus must exactly match its operator-owned Docker '
-                    'GPU count'
+                    f'{kind} --gpus must exactly match its operator-owned '
+                    'Docker GPU count'
                 )
         with self._lock:
             job_id = self.job_id_for(owner_attempt_id, idempotency_key)
@@ -652,9 +878,15 @@ class DockerJobManager(LocalJobManager):
             input_dir = self.root / 'inputs' / owner_key
             input_dir.mkdir(parents=True, exist_ok=True)
             volumes = {
-                str(output_dir): {'bind': '/mlops-output', 'mode': 'rw'},
-                str(input_dir): {'bind': '/mlops-inputs', 'mode': 'ro'},
-                str(self.workspace): {'bind': '/workspace', 'mode': 'ro'},
+                str(self._host_job_path(output_dir)): {
+                    'bind': '/mlops-output',
+                    'mode': 'rw',
+                },
+                str(self._host_job_path(input_dir)): {
+                    'bind': '/mlops-inputs',
+                    'mode': 'ro',
+                },
+                str(self.host_workspace): {'bind': '/workspace', 'mode': 'ro'},
                 **{
                     str(source): {'bind': str(source), 'mode': 'ro'}
                     for source in self.read_only_source_roots
@@ -673,11 +905,16 @@ class DockerJobManager(LocalJobManager):
                 'cap_drop': ['ALL'],
                 'security_opt': ['no-new-privileges:true'],
                 'tmpfs': {'/tmp': 'rw,noexec,nosuid,size=8g'},
+                'shm_size': '16g',
                 'mem_limit': self.memory_limit,
                 'nano_cpus': self.nano_cpus,
                 'labels': {
                     'mlops.job_id': job_id,
                     'mlops.attempt_id': owner_attempt_id or '',
+                },
+                'environment': {
+                    'RIGHTARM_MLOPS_EXECUTOR_IMAGE': image,
+                    'RIGHTARM_MLOPS_EXECUTOR_JOB_KIND': kind,
                 },
             }
             if gpu_count is not None:
@@ -805,7 +1042,11 @@ class DockerJobManager(LocalJobManager):
         with self._lock:
             for job_dir in sorted(self.root.glob('job_*')):
                 request = self._read_optional_json(job_dir / 'request.json')
-                if request is None or request.get('owner_attempt_id') != attempt_id:
+                if (
+                    request is None
+                    or not self._owns_request(request)
+                    or request.get('owner_attempt_id') != attempt_id
+                ):
                     continue
                 job_id = request['job_id']
                 observation = self.observe(job_id, owner_attempt_id=attempt_id)
@@ -907,7 +1148,13 @@ def create_mcp_server(client: MLOpsTaskClient, job_manager: LocalJobManager) -> 
     def mlops_observe_job(job_id: str) -> dict[str, Any]:
         """Read job state, log tail, and structured result/failure manifests."""
 
-        return job_manager.observe(job_id, owner_attempt_id=client.attempt_id)
+        return _fresh_poll_observation(
+            _observe_job_until_terminal(
+                job_manager,
+                job_id,
+                owner_attempt_id=client.attempt_id,
+            )
+        )
 
     @server.tool()
     def mlops_stage_artifact(
@@ -939,7 +1186,12 @@ def create_mcp_server(client: MLOpsTaskClient, job_manager: LocalJobManager) -> 
         path = client.artifacts.materialize(artifact, destination)
         return {
             'artifact_id': artifact.id,
-            'path': job_manager.execution_input_path(client.attempt_id, artifact, path),
+            'path': job_manager.execution_input_path_for_task(
+                context.task_kind,
+                client.attempt_id,
+                artifact,
+                path,
+            ),
             'sha256': artifact.sha256,
             'size_bytes': artifact.size_bytes,
         }
@@ -1045,7 +1297,10 @@ def create_gateway_mcp_server(
         """Launch an allowlisted job owned by this attempt."""
 
         fence(attempt_id, lease_id)
-        authorize_job(attempt_id, argv)
+        try:
+            authorize_job(attempt_id, argv)
+        except (ValueError, PermissionError) as exc:
+            raise _controlled_gateway_tool_error(exc) from exc
         qualified_key = f'{attempt_id}:{idempotency_key}'
         job_id = job_manager.job_id_for(attempt_id, qualified_key)
         controller.ledger.record_job_launch(
@@ -1074,6 +1329,8 @@ def create_gateway_mcp_server(
                     },
                 },
             )
+            if isinstance(exc, (ValueError, PermissionError)):
+                raise _controlled_gateway_tool_error(exc) from exc
             raise
         controller.ledger.record_job_observation(
             attempt_id=attempt_id,
@@ -1086,16 +1343,29 @@ def create_gateway_mcp_server(
     def mlops_observe_job(
         attempt_id: str, lease_id: str, job_id: str
     ) -> dict[str, Any]:
-        """Observe a job only when it belongs to this attempt."""
+        """Observe a fenced job and inline its bounded, declared JSON outputs."""
 
         fence(attempt_id, lease_id)
-        observation = job_manager.observe(job_id, owner_attempt_id=attempt_id)
+        observation = _observe_job_until_terminal(
+            job_manager,
+            job_id,
+            owner_attempt_id=attempt_id,
+        )
         controller.ledger.record_job_observation(
             attempt_id=attempt_id,
             job_id=job_id,
             observation=observation,
         )
-        return observation
+        return _fresh_poll_observation(
+            {
+                **observation,
+                'structured_outputs': job_manager.read_structured_outputs(
+                    job_id,
+                    observation,
+                    attempt_id,
+                ),
+            }
+        )
 
     @server.tool()
     def mlops_stage_artifact(
@@ -1142,9 +1412,15 @@ def create_gateway_mcp_server(
             raise PermissionError('artifact is not an input of this task attempt')
         destination = job_manager.managed_input_path(attempt_id, artifact)
         path = controller.artifact_store.materialize(artifact, destination)
+        task_spec = task_spec_for_attempt(attempt_id)
         return {
             'artifact_id': artifact.id,
-            'path': job_manager.execution_input_path(attempt_id, artifact, path),
+            'path': job_manager.execution_input_path_for_task(
+                task_spec['kind'],
+                attempt_id,
+                artifact,
+                path,
+            ),
             'sha256': artifact.sha256,
             'size_bytes': artifact.size_bytes,
         }

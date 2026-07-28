@@ -96,6 +96,9 @@ class TestProcessSandboxService:
 
         result = await process_sandbox_service._wait_for_server_ready(9000, timeout=1)
         assert result is True
+        process_sandbox_service.httpx_client.get.assert_awaited_once_with(
+            'http://127.0.0.1:9000/alive', timeout=5.0
+        )
 
     @pytest.mark.asyncio
     async def test_wait_for_server_ready_timeout(self, process_sandbox_service):
@@ -219,6 +222,8 @@ class TestProcessSandboxService:
             # Verify
             assert result is not None
             assert result.id == 'custom_sandbox_id'
+            assert result.exposed_urls is not None
+            assert str(result.exposed_urls[0].url) == 'http://127.0.0.1:9000'
 
     @patch('psutil.Process')
     def test_get_process_status_paused(

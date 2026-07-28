@@ -13,6 +13,7 @@ from pathlib import Path
 
 import uvicorn
 
+from openhands.app_server.mlops_task.hybrid_job_manager import HybridJobManager
 from openhands.app_server.mlops_task.mcp_server import (
     DockerJobManager,
     LocalJobManager,
@@ -40,11 +41,21 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument('--job-workspace', type=Path)
     serve.add_argument('--job-root', type=Path)
     serve.add_argument('--job-python', type=Path)
-    serve.add_argument('--executor', choices=('local', 'docker'), default='local')
+    serve.add_argument(
+        '--executor', choices=('local', 'docker', 'hybrid'), default='local'
+    )
     serve.add_argument('--allow-external-jobs', action='store_true')
     serve.add_argument('--external-job-catalog', type=Path)
     serve.add_argument('--docker-image-catalog', type=Path)
+    serve.add_argument(
+        '--docker-job-kind',
+        action='append',
+        default=[],
+        help='with --executor=hybrid, route this job kind to Docker',
+    )
     serve.add_argument('--docker-container-python', default='python')
+    serve.add_argument('--docker-host-job-root', type=Path)
+    serve.add_argument('--docker-host-workspace', type=Path)
     serve.add_argument('--docker-source-root', type=Path, action='append', default=[])
     serve.add_argument('--docker-network-job-kind', action='append', default=[])
     serve.add_argument(
@@ -147,26 +158,74 @@ def main(argv: list[str] | None = None) -> int:
             if args.executor != 'local':
                 raise ValueError('Docker executor requires job workspace and root')
             job_manager = None
-        elif args.executor == 'docker':
+        elif args.executor in {'docker', 'hybrid'}:
+            if (args.docker_host_job_root is None) != (
+                args.docker_host_workspace is None
+            ):
+                raise ValueError(
+                    '--docker-host-job-root and --docker-host-workspace '
+                    'must be provided together'
+                )
             image_catalog = _load_image_catalog(args.docker_image_catalog)
             if image_catalog is None:
-                raise ValueError('Docker executor requires --docker-image-catalog')
-            job_manager = DockerJobManager(
-                args.job_root,
-                args.job_workspace,
-                image_catalog=image_catalog,
-                allow_external_jobs=args.allow_external_jobs,
-                external_job_catalog=_load_job_catalog(args.external_job_catalog),
-                read_only_source_roots=args.docker_source_root,
-                networked_job_kinds=set(args.docker_network_job_kind),
-                gpu_counts=_kind_int_map(args.docker_gpu_count),
-                container_python=args.docker_container_python,
-                memory_limit=args.docker_memory_limit,
-                nano_cpus=args.docker_nano_cpus,
-            )
+                raise ValueError(
+                    'Docker and hybrid executors require --docker-image-catalog'
+                )
+            common = {
+                'image_catalog': image_catalog,
+                'allow_external_jobs': args.allow_external_jobs,
+                'external_job_catalog': _load_job_catalog(args.external_job_catalog),
+                'host_root': args.docker_host_job_root,
+                'host_workspace': args.docker_host_workspace,
+                'read_only_source_roots': args.docker_source_root,
+                'networked_job_kinds': set(args.docker_network_job_kind),
+                'gpu_counts': _kind_int_map(args.docker_gpu_count),
+                'container_python': args.docker_container_python,
+                'memory_limit': args.docker_memory_limit,
+                'nano_cpus': args.docker_nano_cpus,
+            }
+            if args.executor == 'docker':
+                if args.docker_job_kind:
+                    raise ValueError(
+                        '--docker-job-kind is only valid with --executor=hybrid'
+                    )
+                job_manager = DockerJobManager(
+                    args.job_root,
+                    args.job_workspace,
+                    **common,
+                )
+            else:
+                docker_job_kinds = set(args.docker_job_kind)
+                if not docker_job_kinds:
+                    raise ValueError(
+                        'Hybrid executor requires at least one --docker-job-kind'
+                    )
+                job_manager = HybridJobManager(
+                    args.job_root,
+                    args.job_workspace,
+                    docker_job_kinds=docker_job_kinds,
+                    python_executable=(
+                        args.job_python
+                        if args.job_python is not None
+                        else sys.executable
+                    ),
+                    **common,
+                )
         else:
             if args.docker_image_catalog is not None:
-                raise ValueError('--docker-image-catalog requires --executor=docker')
+                raise ValueError(
+                    '--docker-image-catalog requires --executor=docker or hybrid'
+                )
+            if (
+                args.docker_host_job_root is not None
+                or args.docker_host_workspace is not None
+            ):
+                raise ValueError(
+                    '--docker-host-job-root/--docker-host-workspace require '
+                    '--executor=docker or hybrid'
+                )
+            if args.docker_job_kind:
+                raise ValueError('--docker-job-kind requires --executor=hybrid')
             job_manager = LocalJobManager(
                 args.job_root,
                 args.job_workspace,

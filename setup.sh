@@ -16,6 +16,92 @@ first_existing_file() {
   return 0
 }
 
+model_agent_source_sha() {
+  python3 - "${MODEL_AGENT_ROOT_DIR}" <<'PY'
+import hashlib
+import os
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+entries = [
+    root / "openhands",
+    root / "skills",
+    root / "containers" / "app",
+    root / "containers" / "model-agent",
+    root / "frontend",
+    root / "scripts" / "start-model-agent-controller.sh",
+    root / "pyproject.toml",
+    root / "poetry.lock",
+    root / "README.md",
+    root / "MANIFEST.in",
+    root / "LICENSE",
+]
+ignored_directories = {".git", ".venv", "node_modules", "__pycache__"}
+files = []
+for entry in entries:
+    if entry.is_file():
+        files.append(entry)
+        continue
+    for directory, names, filenames in os.walk(entry):
+        names[:] = sorted(name for name in names if name not in ignored_directories)
+        for filename in sorted(filenames):
+            path = Path(directory) / filename
+            if path.is_file():
+                files.append(path)
+digest = hashlib.sha256()
+for path in sorted(files):
+    relative = path.relative_to(root).as_posix().encode("utf-8")
+    digest.update(len(relative).to_bytes(8, "big"))
+    digest.update(relative)
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+print(digest.hexdigest())
+PY
+}
+
+model_agent_base_source_sha() {
+  python3 - "${MODEL_AGENT_ROOT_DIR}" <<'PY'
+import hashlib
+import os
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+entries = [
+    root / "containers" / "app",
+    root / "frontend",
+    root / "pyproject.toml",
+    root / "poetry.lock",
+    root / "README.md",
+    root / "MANIFEST.in",
+    root / "LICENSE",
+]
+ignored_directories = {".git", ".venv", "node_modules", "__pycache__"}
+files = []
+for entry in entries:
+    if entry.is_file():
+        files.append(entry)
+        continue
+    for directory, names, filenames in os.walk(entry):
+        names[:] = sorted(name for name in names if name not in ignored_directories)
+        for filename in sorted(filenames):
+            path = Path(directory) / filename
+            if path.is_file():
+                files.append(path)
+digest = hashlib.sha256()
+for path in sorted(files):
+    relative = path.relative_to(root).as_posix().encode("utf-8")
+    digest.update(len(relative).to_bytes(8, "big"))
+    digest.update(relative)
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+print(digest.hexdigest())
+PY
+}
+
 find_available_port() {
   local candidate="$1"
   local attempts=0
@@ -112,6 +198,86 @@ set -a
 source "${MODEL_AGENT_ENV_FILE}"
 set +a
 
+set_env_scalar() {
+  local name="$1"
+  local value="$2"
+  if grep -q "^${name}=" "${MODEL_AGENT_ENV_FILE}"; then
+    sed -i "s|^${name}=.*$|${name}=${value}|" "${MODEL_AGENT_ENV_FILE}"
+  else
+    printf '%s=%s\n' "${name}" "${value}" >>"${MODEL_AGENT_ENV_FILE}"
+  fi
+  export "${name}=${value}"
+}
+
+model_agent_default_shared_root="${MODEL_AGENT_STATE_DIR}/mlops"
+model_agent_detected_shared_root=""
+model_agent_detected_shared_group=""
+model_agent_detected_shared_gid=""
+for model_agent_runtime_dir in cas imports incoming jobs; do
+  model_agent_runtime_path="${MODEL_AGENT_STATE_DIR}/mlops/${model_agent_runtime_dir}"
+  if [[ ! -L "${model_agent_runtime_path}" ]]; then
+    continue
+  fi
+  model_agent_raw_target="$(readlink "${model_agent_runtime_path}")"
+  if [[ "${model_agent_raw_target}" != /* ]] \
+    || [[ "$(basename "${model_agent_raw_target}")" != "${model_agent_runtime_dir}" ]]; then
+    echo "Managed MLOps links must use matching absolute targets: ${model_agent_runtime_path}" >&2
+    exit 1
+  fi
+  model_agent_candidate_root="$(dirname "${model_agent_raw_target}")"
+  model_agent_candidate_group="$(stat -c '%G' "${model_agent_runtime_path}")"
+  model_agent_candidate_gid="$(stat -c '%g' "${model_agent_runtime_path}")"
+  if [[ -n "${model_agent_detected_shared_root}" ]] \
+    && { [[ "${model_agent_candidate_root}" != "${model_agent_detected_shared_root}" ]] \
+      || [[ "${model_agent_candidate_gid}" != "${model_agent_detected_shared_gid}" ]]; }; then
+    echo "Managed MLOps links do not share one storage root and group." >&2
+    exit 1
+  fi
+  model_agent_detected_shared_root="${model_agent_candidate_root}"
+  model_agent_detected_shared_group="${model_agent_candidate_group}"
+  model_agent_detected_shared_gid="${model_agent_candidate_gid}"
+done
+
+if [[ -n "${model_agent_detected_shared_root}" ]]; then
+  if [[ -n "${MLOPS_SHARED_STORAGE_ROOT:-}" ]] \
+    && [[ "${MLOPS_SHARED_STORAGE_ROOT}" != "${model_agent_default_shared_root}" ]] \
+    && [[ "${MLOPS_SHARED_STORAGE_ROOT}" != "${model_agent_detected_shared_root}" ]]; then
+    echo "Configured shared storage root disagrees with managed MLOps links." >&2
+    exit 1
+  fi
+  set_env_scalar MLOPS_SHARED_STORAGE_ROOT "${model_agent_detected_shared_root}"
+  set_env_scalar MLOPS_SHARED_GROUP "${model_agent_detected_shared_group}"
+  set_env_scalar MLOPS_SHARED_GID "${model_agent_detected_shared_gid}"
+else
+  set_env_scalar MLOPS_SHARED_STORAGE_ROOT \
+    "${MLOPS_SHARED_STORAGE_ROOT:-${model_agent_default_shared_root}}"
+  set_env_scalar MLOPS_SHARED_GROUP "${MLOPS_SHARED_GROUP:-}"
+  set_env_scalar MLOPS_SHARED_GID "${MLOPS_SHARED_GID:-${HOST_GID}}"
+fi
+
+if [[ -n "${MLOPS_SHARED_GROUP:-}" ]]; then
+  model_agent_group_list=" $(id -nG) "
+  if [[ "${model_agent_group_list}" != *" ${MLOPS_SHARED_GROUP} "* ]]; then
+    printf -v model_agent_setup_command '%q ' "$0" "$@"
+    exec sg "${MLOPS_SHARED_GROUP}" -c "${model_agent_setup_command}"
+  fi
+fi
+
+for model_agent_runtime_dir in cas imports incoming jobs; do
+  model_agent_runtime_path="${MODEL_AGENT_STATE_DIR}/mlops/${model_agent_runtime_dir}"
+  if [[ -L "${model_agent_runtime_path}" ]]; then
+    model_agent_resolved_target="$(realpath -e "${model_agent_runtime_path}")"
+    model_agent_expected_target="$(
+      realpath -e "${MLOPS_SHARED_STORAGE_ROOT}/${model_agent_runtime_dir}"
+    )"
+    if [[ "${model_agent_resolved_target}" != "${model_agent_expected_target}" ]] \
+      || [[ "$(stat -Lc '%g' "${model_agent_runtime_path}")" != "${MLOPS_SHARED_GID}" ]]; then
+      echo "Managed MLOps link failed shared-storage validation: ${model_agent_runtime_path}" >&2
+      exit 1
+    fi
+  fi
+done
+
 ensure_env_path_default() {
   local name="$1"
   shift
@@ -166,6 +332,9 @@ fi
 if ! grep -q '^MLOPS_DEFAULT_DATASET_ARTIFACT=' "${MODEL_AGENT_ENV_FILE}"; then
   printf 'MLOPS_DEFAULT_DATASET_ARTIFACT=\n' >>"${MODEL_AGENT_ENV_FILE}"
 fi
+if ! grep -q '^MLOPS_BASELINE_MMACTION_DATASET_ARTIFACT=' "${MODEL_AGENT_ENV_FILE}"; then
+  printf 'MLOPS_BASELINE_MMACTION_DATASET_ARTIFACT=\n' >>"${MODEL_AGENT_ENV_FILE}"
+fi
 
 : "${MODEL_AGENT_INSTANCE_NAME:?missing from .env}"
 : "${MODEL_AGENT_ROOT:?missing from .env}"
@@ -180,7 +349,9 @@ if [[ "${MODEL_AGENT_ROOT}" != "${MODEL_AGENT_ROOT_DIR}" ]]; then
   echo "This clone moved after setup. Remove ${MODEL_AGENT_ENV_FILE} and run setup.sh again." >&2
   exit 1
 fi
-if [[ "${HOST_UID}" != "$(id -u)" ]] || [[ "${HOST_GID}" != "$(id -g)" ]]; then
+model_agent_current_gids=" $(id -G) "
+if [[ "${HOST_UID}" != "$(id -u)" ]] \
+  || [[ "${model_agent_current_gids}" != *" ${HOST_GID} "* ]]; then
   echo "This .env belongs to a different Linux user. Remove it and run setup.sh again." >&2
   exit 1
 fi
@@ -188,16 +359,21 @@ fi
 mkdir -p \
   "${MODEL_AGENT_STATE_DIR}/openhands" \
   "${MODEL_AGENT_STATE_DIR}/controller-home" \
-  "${MODEL_AGENT_STATE_DIR}/mlops/incoming" \
-  "${MODEL_AGENT_STATE_DIR}/mlops/imports" \
+  "${MODEL_AGENT_STATE_DIR}/mlops" \
   "${MODEL_AGENT_STATE_DIR}/secrets" \
   "${MODEL_AGENT_ROOT_DIR}/configs/generated"
+for model_agent_runtime_dir in incoming imports; do
+  model_agent_runtime_path="${MODEL_AGENT_STATE_DIR}/mlops/${model_agent_runtime_dir}"
+  if [[ ! -L "${model_agent_runtime_path}" ]]; then
+    mkdir -p "${model_agent_runtime_path}"
+    chmod 700 "${model_agent_runtime_path}"
+  fi
+done
 chmod 700 \
   "${MODEL_AGENT_STATE_DIR}" \
   "${MODEL_AGENT_STATE_DIR}/openhands" \
   "${MODEL_AGENT_STATE_DIR}/controller-home" \
   "${MODEL_AGENT_STATE_DIR}/mlops" \
-  "${MODEL_AGENT_STATE_DIR}/mlops/imports" \
   "${MODEL_AGENT_STATE_DIR}/secrets"
 
 if [[ ! -f "${TENCENT_COS_CONFIG_PATH}" ]]; then
@@ -217,18 +393,63 @@ if [[ ! -f "${operator_token}" ]]; then
 fi
 chmod 600 "${operator_token}"
 
+model_agent_expected_source_sha="$(model_agent_source_sha)"
+model_agent_expected_base_source_sha="$(model_agent_base_source_sha)"
+model_agent_image_source_sha="$(
+  docker image inspect \
+    --format '{{ index .Config.Labels "org.openai.model-agent.source-sha" }}' \
+    "${MODEL_AGENT_IMAGE}" 2>/dev/null || true
+)"
+model_agent_base_source_stamp="${MODEL_AGENT_STATE_DIR}/base-image-source.sha256"
+model_agent_base_source_sha=""
+model_agent_base_image_exists=0
+if ! docker image inspect "${MODEL_AGENT_BASE_IMAGE}" >/dev/null 2>&1 \
+  && docker image inspect "${MODEL_AGENT_IMAGE}" >/dev/null 2>&1 \
+  && [[ "${MODEL_AGENT_FORCE_BUILD:-0}" != "1" ]] \
+  && [[ "${MODEL_AGENT_FORCE_BASE_BUILD:-0}" != "1" ]]; then
+  echo "Adopting the validated legacy runtime image as the local dependency base."
+  docker tag "${MODEL_AGENT_IMAGE}" "${MODEL_AGENT_BASE_IMAGE}"
+fi
+if docker image inspect "${MODEL_AGENT_BASE_IMAGE}" >/dev/null 2>&1; then
+  model_agent_base_image_exists=1
+  if [[ -f "${model_agent_base_source_stamp}" ]]; then
+    model_agent_base_source_sha="$(<"${model_agent_base_source_stamp}")"
+  else
+    # One-time migration for an already validated local base image. Future
+    # dependency/frontend changes are detected against this persisted stamp.
+    model_agent_base_source_sha="${model_agent_expected_base_source_sha}"
+    printf '%s\n' "${model_agent_base_source_sha}" >"${model_agent_base_source_stamp}"
+  fi
+fi
+model_agent_base_needs_build=0
+if [[ "${MODEL_AGENT_FORCE_BUILD:-0}" == "1" ]] \
+  || [[ "${MODEL_AGENT_FORCE_BASE_BUILD:-0}" == "1" ]] \
+  || ((model_agent_base_image_exists == 0)) \
+  || [[ "${model_agent_base_source_sha}" != "${model_agent_expected_base_source_sha}" ]]; then
+  model_agent_base_needs_build=1
+fi
+
 if [[ "${MODEL_AGENT_SKIP_BUILD:-0}" == "1" ]]; then
   echo "Skipping image build because MODEL_AGENT_SKIP_BUILD=1."
-elif [[ "${MODEL_AGENT_FORCE_BUILD:-0}" == "1" ]] || ! docker image inspect "${MODEL_AGENT_IMAGE}" >/dev/null 2>&1; then
-  echo "Building the bundled OpenHands image. The first build can take several minutes."
-  docker build \
-    --file "${MODEL_AGENT_ROOT_DIR}/containers/app/Dockerfile" \
-    --build-arg OPENHANDS_BUILD_VERSION=model-agent-local \
-    --tag "${MODEL_AGENT_BASE_IMAGE}" \
-    "${MODEL_AGENT_ROOT_DIR}"
+elif ((model_agent_base_needs_build)) \
+  || [[ "${MODEL_AGENT_FORCE_BUILD:-0}" == "1" ]] \
+  || [[ "${model_agent_image_source_sha}" != "${model_agent_expected_source_sha}" ]]; then
+  if ((model_agent_base_needs_build)); then
+    echo "Building the OpenHands dependency base. The first build can take several minutes."
+    docker build \
+      --file "${MODEL_AGENT_ROOT_DIR}/containers/app/Dockerfile" \
+      --build-arg OPENHANDS_BUILD_VERSION=model-agent-local \
+      --tag "${MODEL_AGENT_BASE_IMAGE}" \
+      "${MODEL_AGENT_ROOT_DIR}"
+    printf '%s\n' "${model_agent_expected_base_source_sha}" \
+      >"${model_agent_base_source_stamp}.tmp"
+    mv "${model_agent_base_source_stamp}.tmp" "${model_agent_base_source_stamp}"
+  fi
+  echo "Building the lightweight model-agent code image."
   docker build \
     --file "${MODEL_AGENT_ROOT_DIR}/containers/model-agent/Dockerfile" \
     --build-arg "BASE_IMAGE=${MODEL_AGENT_BASE_IMAGE}" \
+    --build-arg "MODEL_AGENT_SOURCE_SHA=${model_agent_expected_source_sha}" \
     --tag "${MODEL_AGENT_IMAGE}" \
     "${MODEL_AGENT_ROOT_DIR}"
 fi

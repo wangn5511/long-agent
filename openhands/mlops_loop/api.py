@@ -85,7 +85,7 @@ class BootstrapArtifactRequest(BaseModel):
 
 
 class ManualRunCreateRequest(BaseModel):
-    """One of the four public rightArm workflow entry points."""
+    """One public rightArm workflow entry point."""
 
     model_config = ConfigDict(extra='forbid')
 
@@ -172,20 +172,30 @@ def create_app(
 ) -> FastAPI:
     if operator_token is not None and not operator_identity:
         raise ValueError('operator identity is required when operator auth is enabled')
-    app = FastAPI(title='OpenHands Agentic MLOps Loop', version='0.1.0')
+    task_mcp_app = None
+    if job_manager is not None:
+        task_mcp = create_gateway_mcp_server(
+            controller=controller, job_manager=job_manager
+        )
+        task_mcp_app = task_mcp.http_app(path='/', stateless_http=True)
+    app = FastAPI(
+        title='OpenHands Agentic MLOps Loop',
+        version='0.1.0',
+        # A mounted FastMCP application does not receive lifespan events from
+        # Starlette automatically. Its session manager must be started by the
+        # parent application before Agents connect to /mcp/.
+        lifespan=task_mcp_app.lifespan if task_mcp_app is not None else None,
+    )
     resolved_import_root = (
         Path(operator_import_root).resolve()
         if operator_import_root is not None
         else None
     )
 
-    if job_manager is not None:
-        task_mcp = create_gateway_mcp_server(
-            controller=controller, job_manager=job_manager
-        )
+    if task_mcp_app is not None:
         app.mount(
             '/mcp',
-            task_mcp.http_app(path='/', stateless_http=True),
+            task_mcp_app,
             name='mlops-task-mcp',
         )
 

@@ -1,0 +1,38 @@
+apiVersion: mlops.openhands.dev/v1
+kind: MLOpsLoop
+metadata:
+  name: rightarm-gesture-improve-v1
+  labels:
+    model: rgb-gated-stgcn
+    workflow: bounded-improvement
+spec:
+  runTemplate:
+    runSpecUri: artifact://run-specs/right-arm-gesture-improve-v1-run
+  taskSequence:
+    - name: improve-challenger
+      kind: improve-model
+      agentProfile: default
+      validator: rightarm-model-improvement-v1
+      maxAttempts: 2
+      timeoutSeconds: 259200
+  validation:
+    rejectUnverifiedTaskResult: true
+    requireArtifactHash: true
+  persistence:
+    eventStoreRef: rightarm-mlops-postgres
+    artifactStoreRef: rightarm-mlops-cas
+  retry:
+    defaultMaxAttempts: 2
+    initialBackoffSeconds: 30
+    maxBackoffSeconds: 1800
+    retryableFailureClasses:
+      - transient-network
+      - provider-rate-limit
+      - gpu-node-lost
+      - executor-timeout
+      - cuda-oom-with-valid-proposal
+  stop:
+    maxRunDurationSeconds: 259200
+  concurrency:
+    maxActiveRuns: 1
+    maxActiveAttemptsPerRun: 1

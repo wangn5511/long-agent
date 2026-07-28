@@ -5,14 +5,52 @@ readonly MODEL_AGENT_COMMAND_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 readonly MODEL_AGENT_COMMAND_ENV="${MODEL_AGENT_COMMAND_ROOT}/.env"
 
 if [[ ! -f "${MODEL_AGENT_COMMAND_ENV}" ]]; then
-  echo "model-agent: run ./setup.sh first" >&2
-  exit 2
+  if [[ "${1:-}" == "improve" ]]; then
+    "${MODEL_AGENT_COMMAND_ROOT}/setup.sh"
+  else
+    echo "model-agent: run ./setup.sh first" >&2
+    exit 2
+  fi
 fi
 
 set -a
 # shellcheck disable=SC1090
 source "${MODEL_AGENT_COMMAND_ENV}"
 set +a
+
+if [[ -n "${MLOPS_SHARED_GROUP:-}" ]]; then
+  model_agent_group_list=" $(id -nG) "
+  if [[ "${model_agent_group_list}" != *" ${MLOPS_SHARED_GROUP} "* ]]; then
+    printf -v model_agent_reexec_command '%q ' "$0" "$@"
+    exec sg "${MLOPS_SHARED_GROUP}" -c "${model_agent_reexec_command}"
+  fi
+fi
+
+if [[ "${1:-}" == "improve" ]]; then
+  shift
+  model_agent_dry_run=0
+  for model_agent_argument in "$@"; do
+    if [[ "${model_agent_argument}" == "--dry-run" ]]; then
+      model_agent_dry_run=1
+    fi
+  done
+  if ((model_agent_dry_run == 0)); then
+    "${MODEL_AGENT_COMMAND_ROOT}/start.sh"
+    set -a
+    # setup.sh may have migrated an older .env while start.sh was running.
+    # shellcheck disable=SC1090
+    source "${MODEL_AGENT_COMMAND_ENV}"
+    set +a
+    if [[ -n "${MLOPS_SHARED_GROUP:-}" ]]; then
+      model_agent_group_list=" $(id -nG) "
+      if [[ "${model_agent_group_list}" != *" ${MLOPS_SHARED_GROUP} "* ]]; then
+        printf -v model_agent_reexec_command '%q ' "$0" trigger improve "$@"
+        exec sg "${MLOPS_SHARED_GROUP}" -c "${model_agent_reexec_command}"
+      fi
+    fi
+  fi
+  set -- trigger improve "$@"
+fi
 
 export PYTHONPATH="${MODEL_AGENT_COMMAND_ROOT}/workspace/rightArmPerception${PYTHONPATH:+:${PYTHONPATH}}"
 exec python3 -m rightarm_mlops.model_agent_cli "$@"

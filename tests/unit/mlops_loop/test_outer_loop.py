@@ -512,6 +512,82 @@ def test_pending_dispatch_outbox_recovers_after_controller_restart(outer_loop):
     ledger.assert_projection_matches_replay(run['id'])
 
 
+def test_attempt_is_running_before_dispatcher_starts_agent(outer_loop):
+    controller, ledger, _, _ = outer_loop
+
+    class OrderingDispatcher(InMemoryConversationDispatcher):
+        status_at_start: str | None = None
+
+        def start(self, *, conversation_id: str, dispatch_key: str) -> None:
+            context = self.conversations[dispatch_key][1]
+            self.status_at_start = ledger.get_attempt(context.attempt_id)['status']
+            super().start(
+                conversation_id=conversation_id,
+                dispatch_key=dispatch_key,
+            )
+
+    dispatcher = OrderingDispatcher()
+    controller.dispatcher = dispatcher
+    run = controller.create_run(
+        loop_id='gesture-loop',
+        watermark='dispatch-start-ordering',
+        run_spec={'source': {'uri': 'file:///batch'}},
+        tasks=[_task('train', 'train', 'checkpoint')],
+    )
+
+    conversation_id = controller.dispatch_current_task(run['id'])
+
+    assert conversation_id is not None
+    assert dispatcher.status_at_start == 'RUNNING'
+    assert dispatcher.started_dispatches == {
+        f'dispatch:{ledger.list_attempts(run["id"])[0]["id"]}'
+    }
+
+
+def test_running_attempt_retries_start_after_post_commit_failure(outer_loop):
+    controller, ledger, _, _ = outer_loop
+
+    class FailOnceStartDispatcher(InMemoryConversationDispatcher):
+        start_calls = 0
+
+        def start(self, *, conversation_id: str, dispatch_key: str) -> None:
+            self.start_calls += 1
+            if self.start_calls == 1:
+                raise ConnectionError('start response lost')
+            super().start(
+                conversation_id=conversation_id,
+                dispatch_key=dispatch_key,
+            )
+
+    dispatcher = FailOnceStartDispatcher()
+    controller.dispatcher = dispatcher
+    run = controller.create_run(
+        loop_id='gesture-loop',
+        watermark='dispatch-start-recovery',
+        run_spec={'source': {'uri': 'file:///batch'}},
+        tasks=[_task('train', 'train', 'checkpoint')],
+    )
+
+    with pytest.raises(ConnectionError, match='start response lost'):
+        controller.dispatch_current_task(run['id'])
+
+    attempt = ledger.list_attempts(run['id'])[0]
+    assert attempt['status'] == 'RUNNING'
+    assert ledger.list_outbox(run['id'])[0]['status'] == 'DELIVERED'
+
+    recovered = controller.dispatch_current_task(run['id'])
+
+    assert recovered == attempt['conversation_id']
+    assert dispatcher.start_calls == 2
+    assert dispatcher.started_dispatches == {attempt['dispatch_key']}
+    assert [
+        event['event_type']
+        for event in ledger.list_events(run['id'])
+        if event['event_type'] == 'TaskAttemptDispatched'
+    ] == ['TaskAttemptDispatched']
+    ledger.assert_projection_matches_replay(run['id'])
+
+
 def test_stale_agent_lease_is_fenced(outer_loop):
     controller, ledger, _, _ = outer_loop
     run = controller.create_run(

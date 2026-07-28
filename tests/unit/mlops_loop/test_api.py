@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from openhands.app_server.mlops_task.mcp_server import LocalJobManager
 from openhands.mlops_loop.api import create_app
 from openhands.mlops_loop.artifact_store import LocalArtifactStore
 from openhands.mlops_loop.controller import LoopController
@@ -186,6 +187,42 @@ def test_operator_mutations_require_configured_token(tmp_path: Path):
         ).status_code
         == 200
     )
+
+
+def test_mounted_task_mcp_lifespan_accepts_initialize(tmp_path: Path):
+    artifacts = LocalArtifactStore(tmp_path / 'cas')
+    controller = LoopController(
+        ledger=SQLiteLedger(tmp_path / 'ledger.db'),
+        artifact_store=artifacts,
+        dispatcher=InMemoryConversationDispatcher(),
+        validators=ValidatorRegistry(ContractValidator(artifacts)),
+        retry_policy=RetryPolicy(frozenset()),
+    )
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    app = create_app(
+        controller,
+        job_manager=LocalJobManager(tmp_path / 'jobs', workspace),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            '/mcp/',
+            headers={'Accept': 'application/json, text/event-stream'},
+            json={
+                'jsonrpc': '2.0',
+                'id': 1,
+                'method': 'initialize',
+                'params': {
+                    'protocolVersion': '2025-03-26',
+                    'capabilities': {},
+                    'clientInfo': {'name': 'test', 'version': '1'},
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    assert 'agentic-mlops-gateway-v1' in response.text
 
 
 def test_operator_can_import_artifacts_and_create_manual_train_run(tmp_path: Path):

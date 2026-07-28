@@ -1,4 +1,4 @@
-"""Host-side client for the four operator-facing model-agent entry points."""
+"""Host-side client for the operator-facing model-agent entry points."""
 
 from __future__ import annotations
 
@@ -14,8 +14,17 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from rightarm_mlops.exploration_efficiency import (
+    build_exploration_efficiency_report,
+)
+
 DEPENDENCIES: dict[str, tuple[tuple[str, str, str], ...]] = {
     'data': (
+        (
+            'baseline-mmaction-dataset',
+            'MLOPS_BASELINE_MMACTION_DATASET_ARTIFACT',
+            'MLOPS_DEFAULT_DATASET_PATH',
+        ),
         ('rtm-detector', 'MLOPS_RTM_DETECTOR_ARTIFACT', 'MLOPS_RTM_DETECTOR_PATH'),
         (
             'rtm-person-pose',
@@ -32,6 +41,11 @@ DEPENDENCIES: dict[str, tuple[tuple[str, str, str], ...]] = {
         ('base-model', 'MLOPS_CHAMPION_BASE_MODEL_ARTIFACT', 'MLOPS_BASE_MODEL_PATH'),
     ),
     'full': (
+        (
+            'baseline-mmaction-dataset',
+            'MLOPS_BASELINE_MMACTION_DATASET_ARTIFACT',
+            'MLOPS_DEFAULT_DATASET_PATH',
+        ),
         ('rtm-detector', 'MLOPS_RTM_DETECTOR_ARTIFACT', 'MLOPS_RTM_DETECTOR_PATH'),
         (
             'rtm-person-pose',
@@ -52,7 +66,41 @@ DEPENDENCIES: dict[str, tuple[tuple[str, str, str], ...]] = {
             'MLOPS_DEFAULT_DATASET_PATH',
         ),
     ),
+    'improve': (
+        (
+            'mmaction-dataset',
+            'MLOPS_DEFAULT_DATASET_ARTIFACT',
+            'MLOPS_DEFAULT_DATASET_PATH',
+        ),
+        ('base-model', 'MLOPS_CHAMPION_BASE_MODEL_ARTIFACT', 'MLOPS_BASE_MODEL_PATH'),
+    ),
 }
+
+
+def _bounded_integer(minimum: int, maximum: int):
+    def parse(value: str) -> int:
+        try:
+            parsed = int(value)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError('expected an integer') from exc
+        if not minimum <= parsed <= maximum:
+            raise argparse.ArgumentTypeError(f'value must be in [{minimum}, {maximum}]')
+        return parsed
+
+    return parse
+
+
+def _bounded_delta(maximum: float):
+    def parse(value: str) -> float:
+        try:
+            parsed = float(value)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError('expected a number') from exc
+        if not 0.0 <= parsed <= maximum:
+            raise argparse.ArgumentTypeError(f'value must be in [0, {maximum}]')
+        return parsed
+
+    return parse
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -66,6 +114,11 @@ def _parser() -> argparse.ArgumentParser:
 
     data = modes.add_parser('data', help='COS download through PKL generation')
     data.add_argument('--cos-uri', required=True)
+    data.add_argument(
+        '--baseline-pkl',
+        type=Path,
+        help='override the configured trusted SFT baseline PKL',
+    )
     _rtm_arguments(data)
     _common_trigger_arguments(data)
 
@@ -77,6 +130,11 @@ def _parser() -> argparse.ArgumentParser:
     full = modes.add_parser('full', help='run data, train, evaluate and export')
     full.add_argument('--cos-uri', required=True)
     full.add_argument('--base-model', type=Path)
+    full.add_argument(
+        '--baseline-pkl',
+        type=Path,
+        help='override the configured trusted SFT baseline PKL',
+    )
     _rtm_arguments(full)
     _common_trigger_arguments(full)
 
@@ -87,9 +145,83 @@ def _parser() -> argparse.ArgumentParser:
     )
     _common_trigger_arguments(export)
 
+    improve = modes.add_parser(
+        'improve',
+        help='run bounded train/evaluate/diagnose trials from an incumbent model',
+    )
+    improve.add_argument(
+        '--pkl',
+        type=Path,
+        help='override the configured immutable training/evaluation PKL',
+    )
+    incumbent = improve.add_mutually_exclusive_group()
+    incumbent.add_argument(
+        '--checkpoint',
+        dest='base_model',
+        type=Path,
+        help='incumbent checkpoint to evaluate and improve',
+    )
+    incumbent.add_argument(
+        '--base-model',
+        dest='base_model',
+        type=Path,
+        help='alias for --checkpoint',
+    )
+    improve.add_argument(
+        '--init-checkpoint',
+        type=Path,
+        help='optional distinct initialization checkpoint for training trials',
+    )
+    improve.add_argument('--max-trials', type=_bounded_integer(1, 8), default=4)
+    improve.add_argument('--patience', type=_bounded_integer(1, 8), default=2)
+    improve.add_argument(
+        '--target-macro-f1-delta', type=_bounded_delta(1.0), default=0.002
+    )
+    improve.add_argument('--min-improvement', type=_bounded_delta(0.05), default=0.0005)
+    improve.add_argument('--max-epochs', type=_bounded_integer(1, 100), default=50)
+    improve.add_argument(
+        '--batch-size', type=int, choices=(4, 8, 16, 32, 64), default=32
+    )
+    improve.add_argument('--workers', type=_bounded_integer(0, 32), default=12)
+    improve.add_argument(
+        '--gpus',
+        type=_bounded_integer(1, 8),
+        default=os.environ.get('MLOPS_TRAIN_GPU_COUNT', '1'),
+    )
+    _common_trigger_arguments(improve)
+
     status = subparsers.add_parser('status', help='show recent controller Runs')
     status.add_argument('--limit', type=int, default=20)
+    status.add_argument(
+        '--timeout',
+        type=_bounded_integer(1, 300),
+        default=60,
+        help='controller request timeout in seconds',
+    )
     status.add_argument('--json', action='store_true', dest='as_json')
+
+    efficiency = subparsers.add_parser(
+        'efficiency', help='compare one improve Run with a paired human baseline'
+    )
+    efficiency.add_argument('--run-id', required=True)
+    efficiency.add_argument(
+        '--expected-trials',
+        type=_bounded_integer(1, 8),
+        help='optional assertion; must equal the Agent-selected valid trial count',
+    )
+    efficiency.add_argument('--human-wall-minutes', type=float)
+    efficiency.add_argument('--human-baseline-id')
+    efficiency.add_argument(
+        '--human-valid-trials',
+        type=_bounded_integer(1, 8),
+        help='valid iterations completed by the paired human baseline',
+    )
+    efficiency.add_argument(
+        '--human-baseline-json',
+        type=Path,
+        help='auditable paired-human baseline manifest for a claim-eligible result',
+    )
+    efficiency.add_argument('--json', action='store_true', dest='as_json')
     return parser
 
 
@@ -122,8 +254,8 @@ class ControllerClient:
         if not self.token:
             raise ValueError('controller token is empty; run ./setup.sh')
 
-    def get(self, path: str) -> Any:
-        return self._request('GET', path, None)
+    def get(self, path: str, *, timeout: float = 60) -> Any:
+        return self._request('GET', path, None, timeout=timeout)
 
     def post(self, path: str, payload: dict[str, Any], *, timeout: float = 60) -> Any:
         return self._request('POST', path, payload, timeout=timeout)
@@ -217,6 +349,7 @@ def _path_override(args: argparse.Namespace, kind: str) -> Path | None:
     names = {
         'base-model': 'base_model',
         'mmaction-dataset': 'pkl',
+        'baseline-mmaction-dataset': 'baseline_pkl',
         'rtm-detector': 'det_onnx',
         'rtm-person-pose': 'person_pose_onnx',
         'rtm-hand-pose': 'hand_pose_onnx',
@@ -227,10 +360,16 @@ def _path_override(args: argparse.Namespace, kind: str) -> Path | None:
 
 def _input_plan(args: argparse.Namespace) -> list[dict[str, str]]:
     inputs: list[dict[str, str]] = []
+    if args.mode == 'improve':
+        _improvement_parameters(args)
     if args.mode == 'train':
         inputs.append({'kind': 'mmaction-dataset', 'path': str(args.pkl)})
     elif args.mode == 'export':
         inputs.append({'kind': 'checkpoint', 'path': str(args.checkpoint)})
+    if args.mode == 'improve' and args.init_checkpoint is not None:
+        inputs.append(
+            {'kind': 'training-init-model', 'path': str(args.init_checkpoint)}
+        )
 
     for kind, artifact_env, path_env in DEPENDENCIES[args.mode]:
         override = _path_override(args, kind)
@@ -244,9 +383,25 @@ def _input_plan(args: argparse.Namespace) -> list[dict[str, str]]:
             inputs.append({'kind': kind, 'path': configured_path})
         else:
             raise ValueError(
-                f'missing {kind}; pass its file option or set {artifact_env}/{path_env} in .env'
+                f'missing {kind}; pass its file option or set '
+                f'{artifact_env}/{path_env} in .env'
             )
     return inputs
+
+
+def _improvement_parameters(args: argparse.Namespace) -> dict[str, int | float]:
+    if args.patience > args.max_trials:
+        raise ValueError('improve --patience must not exceed --max-trials')
+    return {
+        'max_trials': args.max_trials,
+        'patience': args.patience,
+        'target_macro_f1_delta': args.target_macro_f1_delta,
+        'min_improvement': args.min_improvement,
+        'max_epochs': args.max_epochs,
+        'batch_size': args.batch_size,
+        'workers': args.workers,
+        'gpus': args.gpus,
+    }
 
 
 def _trigger(args: argparse.Namespace) -> int:
@@ -259,6 +414,9 @@ def _trigger(args: argparse.Namespace) -> int:
             item['path'] = str(path)
     request_id = args.request_id or uuid.uuid4().hex
     source_uri = getattr(args, 'cos_uri', None)
+    parameters: dict[str, Any] = {'triggered_by': os.environ.get('USER', 'operator')}
+    if args.mode == 'improve':
+        parameters.update(_improvement_parameters(args))
     if args.dry_run:
         print(
             json.dumps(
@@ -267,6 +425,7 @@ def _trigger(args: argparse.Namespace) -> int:
                     'request_id': request_id,
                     'source_uri': source_uri,
                     'inputs': inputs,
+                    'parameters': parameters,
                     'will_dispatch': False,
                 },
                 ensure_ascii=False,
@@ -295,7 +454,7 @@ def _trigger(args: argparse.Namespace) -> int:
             'request_id': request_id,
             'source_uri': source_uri,
             'initial_artifact_ids': artifact_ids,
-            'parameters': {'triggered_by': os.environ.get('USER', 'operator')},
+            'parameters': parameters,
         },
     )
     print(f'Run 已创建：{result["id"]}')
@@ -307,7 +466,10 @@ def _trigger(args: argparse.Namespace) -> int:
 
 
 def _status(args: argparse.Namespace) -> int:
-    result = ControllerClient().get(f'/api/v1/mlops/runs?limit={args.limit}')
+    result = ControllerClient().get(
+        f'/api/v1/mlops/runs?limit={args.limit}',
+        timeout=args.timeout,
+    )
     if args.as_json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
@@ -324,12 +486,64 @@ def _status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _efficiency(args: argparse.Namespace) -> int:
+    human_seconds = None
+    if args.human_wall_minutes is not None:
+        human_seconds = args.human_wall_minutes * 60.0
+    human_manifest = None
+    if args.human_baseline_json is not None:
+        raw_manifest = json.loads(
+            args.human_baseline_json.resolve(strict=True).read_text(encoding='utf-8')
+        )
+        if not isinstance(raw_manifest, dict):
+            raise ValueError('human baseline JSON must contain one object')
+        human_manifest = raw_manifest
+    audit = ControllerClient().get(f'/api/v1/mlops/runs/{args.run_id}/audit')
+    report = build_exploration_efficiency_report(
+        audit,
+        expected_trials=args.expected_trials,
+        human_wall_seconds=human_seconds,
+        human_baseline_id=args.human_baseline_id,
+        human_valid_trials=args.human_valid_trials,
+        human_baseline_manifest=human_manifest,
+    )
+    if args.as_json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
+    print(
+        f'Run {report["run_id"]}: '
+        f'Agent 自主完成 {report["valid_trial_count"]} 次有效迭代'
+    )
+    if report['agent_wall_seconds'] is None:
+        print(f'当前状态：{report["run_state"]}，尚不能计算最终墙钟时间。')
+    else:
+        print(f'Agent 端到端墙钟：{report["agent_wall_seconds"] / 60:.2f} 分钟')
+    comparison = report['comparison']
+    if comparison is not None:
+        print(
+            f'相对人工时间比：{comparison["agent_to_human_time_ratio"]:.3f}；'
+            f'节省：{comparison["time_saving_fraction"]:.1%}；'
+            f'加速：{comparison["speedup"]:.2f}x'
+        )
+        if report['claim_eligible']:
+            print('对比证据：已通过同口径人工基线清单校验，可用于正式结论。')
+        else:
+            print(
+                '对比证据：当前为结构化人工自证，尚未独立封存，不能作为正式效率结论。'
+            )
+    else:
+        print('未提供可追踪的人工墙钟基线；当前只报告 Agent 侧效率。')
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.command == 'trigger':
             return _trigger(args)
-        return _status(args)
+        if args.command == 'status':
+            return _status(args)
+        return _efficiency(args)
     except (OSError, RuntimeError, ValueError) as exc:
         print(f'model-agent: {exc}', file=sys.stderr)
         return 2

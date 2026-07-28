@@ -216,8 +216,16 @@ class LoopController:
                 idempotency_key=f'first-attempt:{task_record["id"]}',
             )
             run = self.ledger.get_run(run_id)
+        if attempt['status'] == AttemptStatus.RUNNING:
+            conversation_id = attempt.get('conversation_id')
+            dispatch_key = attempt.get('dispatch_key')
+            if conversation_id and dispatch_key:
+                self.dispatcher.start(
+                    conversation_id=conversation_id,
+                    dispatch_key=dispatch_key,
+                )
+            return conversation_id
         if attempt['status'] in {
-            AttemptStatus.RUNNING,
             AttemptStatus.RESULT_SUBMITTED,
             AttemptStatus.ACCEPTED,
         }:
@@ -288,6 +296,10 @@ class LoopController:
             conversation_id=conversation_id,
             lease_id=lease_id,
             expected_version=current['version'],
+        )
+        self.dispatcher.start(
+            conversation_id=conversation_id,
+            dispatch_key=dispatch_key,
         )
         return conversation_id
 

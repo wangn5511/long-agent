@@ -22,7 +22,7 @@ services:
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
       ALL_PROXY: ${ALL_PROXY:-}
-      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,openhands,loop-controller}
+      NO_PROXY: localhost,127.0.0.1,::1,openhands,loop-controller,api.deepseek.com,${NO_PROXY:-}
     ports:
       - "127.0.0.1:${OPENHANDS_PORT}:3000"
     volumes:
@@ -51,6 +51,7 @@ services:
     user: "${HOST_UID}:${HOST_GID}"
     group_add:
       - "${DOCKER_GID}"
+      - "${MLOPS_SHARED_GID}"
     restart: unless-stopped
     init: true
     depends_on:
@@ -74,6 +75,8 @@ services:
       MLOPS_RUN_TEMPLATE: ${MLOPS_RUN_TEMPLATE:-/app/openhands/mlops_loop/specs/right-arm-gesture-loop-v1-run.yaml}
       MLOPS_EXECUTOR: ${MLOPS_EXECUTOR:-local}
       MLOPS_DOCKER_IMAGE_CATALOG: /app-config/generated/docker-images.json
+      MLOPS_DOCKER_HOST_JOB_ROOT: ${MODEL_AGENT_STATE_DIR}/mlops/jobs
+      MLOPS_DOCKER_HOST_WORKSPACE: ${MODEL_AGENT_ROOT}/workspace/rightArmPerception
       MLOPS_DOCKER_SOURCE_ROOT: ${MLOPS_DOCKER_SOURCE_ROOT:-}
       MLOPS_TRAIN_GPU_COUNT: ${MLOPS_TRAIN_GPU_COUNT:-}
       RIGHTARM_REPOSITORY: ${RIGHTARM_REPOSITORY:-}
@@ -83,6 +86,7 @@ services:
       RIGHTARM_COS_ALLOWED_PREFIX: ${RIGHTARM_COS_ALLOWED_PREFIX:-}
       RIGHTARM_COS_DISK_RESERVE_BYTES: ${RIGHTARM_COS_DISK_RESERVE_BYTES:-21474836480}
       MLOPS_CHAMPION_BASE_MODEL_ARTIFACT: ${MLOPS_CHAMPION_BASE_MODEL_ARTIFACT:-}
+      MLOPS_BASELINE_MMACTION_DATASET_ARTIFACT: ${MLOPS_BASELINE_MMACTION_DATASET_ARTIFACT:-}
       MLOPS_FROZEN_TEST_SET_ARTIFACT: ${MLOPS_FROZEN_TEST_SET_ARTIFACT:-}
       MLOPS_RTM_DETECTOR_ARTIFACT: ${MLOPS_RTM_DETECTOR_ARTIFACT:-}
       MLOPS_RTM_PERSON_POSE_ARTIFACT: ${MLOPS_RTM_PERSON_POSE_ARTIFACT:-}
@@ -96,7 +100,7 @@ services:
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
       ALL_PROXY: ${ALL_PROXY:-}
-      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,openhands,loop-controller}
+      NO_PROXY: localhost,127.0.0.1,::1,openhands,loop-controller,api.deepseek.com,${NO_PROXY:-}
     ports:
       - "127.0.0.1:${MLOPS_PORT}:8765"
     volumes:
@@ -116,6 +120,9 @@ services:
       - type: bind
         source: ${MODEL_AGENT_STATE_DIR}/mlops
         target: /var/lib/rightarm-mlops
+      - type: bind
+        source: ${MLOPS_SHARED_STORAGE_ROOT}
+        target: ${MLOPS_SHARED_STORAGE_ROOT}
       - type: bind
         source: ${MODEL_AGENT_STATE_DIR}/secrets/mlops-operator-token
         target: /run/secrets/mlops_operator_token
