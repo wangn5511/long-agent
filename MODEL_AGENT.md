@@ -56,7 +56,7 @@ cd model-agent
 ./stop.sh
 ```
 
-## 四种人工入口
+## 五种人工入口
 
 启动服务并在 OpenHands Settings 中配置 LLM 后，可以从仓库根目录按阶段创建
 一个可审计 Run：
@@ -78,14 +78,50 @@ cd model-agent
 ./model-agent trigger export \
   --checkpoint /path/to/best.pth
 
+# 基于现有模型做有界训练、评测和改进选择
+./model-agent trigger improve \
+  --pkl /path/to/merged-gesture-11.pkl \
+  --checkpoint /path/to/best.pth
+
+# 使用 .env 中的数据集、incumbent 和 GPU 配置；服务未启动时会自动启动
+./model-agent improve
+
 # 查看最近的 Run、状态和当前步骤
 ./model-agent status
+
+# Run 完成后，先输出 Agent 时间和同口径比较指纹
+./model-agent efficiency --run-id RUN_ID --json
+
+# 快速估算（会明确标成不可用于正式结论）
+./model-agent efficiency \
+  --run-id RUN_ID \
+  --human-wall-minutes 240 \
+  --human-baseline-id human-adaptive-case-001 \
+  --human-valid-trials N
+
+# 结构化对比：人工记录清单必须绑定上一步的比较指纹
+./model-agent efficiency \
+  --run-id RUN_ID \
+  --human-baseline-json /path/to/human-adaptive-case-001.json
 ```
 
-`train` 所需基线模型、`export` 所需评估 PKL，以及 `data/full` 所需三个
-RTM ONNX 文件可以直接追加命令参数；也可以在私有 `.env` 中设置
+`train` 所需基线模型、`export` 所需评估 PKL、`improve` 所需 incumbent
+checkpoint，以及 `data/full` 所需三个 RTM ONNX 文件可以直接追加命令参数；也可以在私有 `.env` 中设置
 `MLOPS_BASE_MODEL_PATH`、`MLOPS_DEFAULT_DATASET_PATH` 和三个
 `MLOPS_RTM_*_PATH`。`setup.sh` 会发现这台服务器上已有的兼容文件。
+
+一键入口 `./model-agent improve` 默认给 Agent 4 轮安全上限，这不是固定轮数；Agent
+会根据每轮实测提升、目标阈值和 patience 自主决定实际完成的 N 轮并停止。Controller 会独立复算评测指标，
+最终保留合规的 challenger，或继续保留 champion。显式的 `trigger improve` 入口可覆盖
+数据集、checkpoint、最大轮数和自适应停止参数。
+效率报告只把产出 `optimization-trial-report` 且通过最终 Validator 的试验算作
+有效迭代；失败和重试会计入耗时/GPU-hours，但不会冒充有效探索。人工基线必须
+使用相同数据、模型、代码、镜像、8 GPU 和搜索策略，并完成与 Agent 实际完成相同的
+N 次有效迭代；不能事先把 N 固定为 4。手填分钟数只
+产生非结构化估算；包含起止时间、证据 URI、有效轮数和匹配比较指纹的
+`rightarm.gesture.human-exploration-baseline/v1` JSON 清单会生成结构化自证结果。
+在人工证据和实际执行代码尚未独立封存前，报告会保持 `claim_eligible=false`，不会把
+“节省 50%”包装成已验证事实。
 
 执行前可追加 `--dry-run`，只检查参数和输入，不复制文件、不创建 Run，
 也不会启动训练。正式触发时，本地文件先进入当前用户的私有导入区并经过
