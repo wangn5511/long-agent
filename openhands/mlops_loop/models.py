@@ -15,6 +15,7 @@ TASK_RESULT_PROTOCOL: Literal['mlops.openhands.dev/task-result/v1'] = (
 class RunState(StrEnum):
     CREATED = 'CREATED'
     WAITING_FOR_AGENT = 'WAITING_FOR_AGENT'
+    WAITING_EXTERNAL = 'WAITING_EXTERNAL'
     VALIDATING_RESULT = 'VALIDATING_RESULT'
     RETRY_SCHEDULED = 'RETRY_SCHEDULED'
     NEEDS_INTERVENTION = 'NEEDS_INTERVENTION'
@@ -28,6 +29,7 @@ class TaskStatus(StrEnum):
     PENDING = 'PENDING'
     DISPATCHED = 'DISPATCHED'
     RUNNING = 'RUNNING'
+    WAITING_EXTERNAL = 'WAITING_EXTERNAL'
     RESULT_SUBMITTED = 'RESULT_SUBMITTED'
     VALIDATING = 'VALIDATING'
     SUCCEEDED = 'SUCCEEDED'
@@ -41,6 +43,7 @@ class AttemptStatus(StrEnum):
     CREATED = 'CREATED'
     DISPATCHED = 'DISPATCHED'
     RUNNING = 'RUNNING'
+    WAITING_EXTERNAL = 'WAITING_EXTERNAL'
     RESULT_SUBMITTED = 'RESULT_SUBMITTED'
     ACCEPTED = 'ACCEPTED'
     REJECTED = 'REJECTED'
@@ -108,14 +111,20 @@ class NextAttemptProposal(BaseModel):
 
 
 class TaskResult(BaseModel):
-    """The only structured completion message accepted from a task agent."""
+    """The structured completion or scheduling message accepted from an Agent."""
 
     model_config = ConfigDict(extra='forbid')
 
     protocol: Literal['mlops.openhands.dev/task-result/v1'] = TASK_RESULT_PROTOCOL
     task_id: str = Field(min_length=1)
     attempt_id: str = Field(min_length=1)
-    status: Literal['succeeded', 'failed', 'needs_decision', 'cancelled']
+    status: Literal[
+        'succeeded',
+        'failed',
+        'needs_decision',
+        'cancelled',
+        'waiting_external',
+    ]
     summary: str = Field(min_length=1)
     artifact_candidates: list[ArtifactCandidate] = Field(default_factory=list)
     lineage_proposals: list[LineageProposal] = Field(default_factory=list)
@@ -129,6 +138,14 @@ class TaskResult(BaseModel):
             raise ValueError('a successful result cannot propose another attempt')
         if self.status == 'failed' and self.next_attempt_proposal is None:
             raise ValueError('a failed result must include a failure proposal')
+        if self.status == 'waiting_external' and (
+            self.artifact_candidates
+            or self.lineage_proposals
+            or self.next_attempt_proposal is not None
+        ):
+            raise ValueError(
+                'a waiting result cannot publish artifacts, lineage, or a retry'
+            )
         return self
 
 

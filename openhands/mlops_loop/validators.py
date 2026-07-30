@@ -56,6 +56,12 @@ class ContractValidator:
                 ValidationDisposition.TERMINAL,
                 ['task agent cancelled the attempt'],
             )
+        if result.status == 'waiting_external':
+            return self._result(
+                validation_id,
+                ValidationDisposition.TERMINAL,
+                ['waiting_external is a scheduling signal, not a final result'],
+            )
         if result.status == 'needs_decision':
             return self._result(
                 validation_id,

@@ -43,7 +43,7 @@ spec:
     minImprovement: 0.0005
     maxEpochs: 50
     batchSize: 32
-    workers: 12
+    workers: 2
     gpus: 1
     allowedChangeFamilies:
       - fine-tune

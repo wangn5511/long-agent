@@ -76,7 +76,16 @@ case "${MLOPS_EXECUTOR}" in
           --docker-gpu-count
           "${gpu_job_kind}=${MLOPS_TRAIN_GPU_COUNT}"
         )
+        if [[ -n "${MLOPS_TRAIN_GPU_DEVICES:-}" ]]; then
+          args+=(
+            --docker-gpu-devices
+            "${gpu_job_kind}=${MLOPS_TRAIN_GPU_DEVICES}"
+          )
+        fi
       done
+    elif [[ -n "${MLOPS_TRAIN_GPU_DEVICES:-}" ]]; then
+      echo "MLOPS_TRAIN_GPU_COUNT is required with MLOPS_TRAIN_GPU_DEVICES" >&2
+      exit 1
     fi
     if [[ "${MLOPS_EXECUTOR}" == "hybrid" ]]; then
       for docker_job_kind in train benchmark-checkpoint train-eval-trial; do

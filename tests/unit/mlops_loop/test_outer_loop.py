@@ -167,6 +167,295 @@ def test_two_tasks_use_two_conversations_and_replay_projection(
     ledger.assert_projection_matches_replay(run_id)
 
 
+def test_running_job_continues_in_new_conversation_without_new_attempt(outer_loop):
+    controller, ledger, _, dispatcher = outer_loop
+    run = controller.create_run(
+        loop_id='gesture-loop',
+        watermark='conversation-continuation',
+        run_spec={'source': {'uri': 'file:///batch'}},
+        tasks=[
+            TaskSpec(
+                name='improve-model',
+                kind='improve-model',
+                objective='run one long training job',
+                agent_profile='test-profile',
+                validator='test-validator',
+                max_attempts=1,
+                timeout_seconds=60,
+            )
+        ],
+    )
+    first_conversation_id = controller.dispatch_current_task(run['id'])
+    task, attempt, first_lease = _active_attempt(ledger, run['id'])
+    ledger.record_job_launch(
+        attempt_id=attempt['id'],
+        job_id='job-long-training',
+        idempotency_key='trial-1',
+        argv=['rightarm-mlops', 'train-eval-trial'],
+        status='running',
+    )
+    waiting = TaskResult(
+        task_id=task['id'],
+        attempt_id=attempt['id'],
+        status='waiting_external',
+        summary='trial-1 is still running; continue observing it',
+        evidence_refs=['job:job-long-training'],
+    )
+
+    assert (
+        controller.submit_result(run['id'], waiting, first_lease['lease_id'])
+        is RunState.WAITING_EXTERNAL
+    )
+    yielded_attempt = ledger.get_attempt(attempt['id'])
+    assert yielded_attempt['status'] == 'WAITING_EXTERNAL'
+    assert yielded_attempt['attempt_spec']['_continuation']['job_ids'] == [
+        'job-long-training'
+    ]
+    assert ledger.get_task(task['id'])['attempt_count'] == 1
+    with pytest.raises(LeaseConflict, match='no longer active'):
+        controller.get_task_context(attempt['id'], first_lease['lease_id'])
+
+    # Retrying a response-lost yield is idempotent while the next episode has
+    # not started.
+    assert (
+        controller.submit_result(run['id'], waiting, first_lease['lease_id'])
+        is RunState.WAITING_EXTERNAL
+    )
+    assert [
+        event['event_type']
+        for event in ledger.list_events(run['id'])
+        if event['event_type'] == 'TaskAttemptYielded'
+    ] == ['TaskAttemptYielded']
+
+    assert controller.tick(run['id']) is RunState.WAITING_FOR_AGENT
+    resumed_attempt = ledger.get_attempt(attempt['id'])
+    resumed_lease = ledger.get_lease(attempt['id'])
+    second_conversation_id = resumed_attempt['conversation_id']
+    assert second_conversation_id != first_conversation_id
+    assert resumed_attempt['attempt_number'] == 1
+    assert ledger.get_task(task['id'])['attempt_count'] == 1
+    assert resumed_lease['lease_id'] != first_lease['lease_id']
+    continuation_key = f'dispatch:{attempt["id"]}:continuation:1'
+    context = dispatcher.conversations[continuation_key][1]
+    assert context.attempt_id == attempt['id']
+    assert context.attempt_spec['_continuation']['yield_count'] == 1
+    assert context.evidence == [
+        {
+            'kind': 'job-attempt',
+            'job_id': 'job-long-training',
+            'status': 'running',
+            'return_code': None,
+            'result': None,
+            'failure': None,
+            'log_path': None,
+            'log_sha256': None,
+            'log_size_bytes': None,
+        }
+    ]
+    with pytest.raises(LeaseConflict):
+        controller.get_task_context(attempt['id'], first_lease['lease_id'])
+
+    ledger.record_job_observation(
+        attempt_id=attempt['id'],
+        job_id='job-long-training',
+        observation={
+            'status': 'succeeded',
+            'return_code': 0,
+            'result': {'metrics': {'macro_f1': 0.99}},
+        },
+    )
+    assert (
+        controller.submit_result(
+            run['id'],
+            TaskResult(
+                task_id=task['id'],
+                attempt_id=attempt['id'],
+                status='succeeded',
+                summary='the resumed Conversation observed the completed job',
+            ),
+            resumed_lease['lease_id'],
+        )
+        is RunState.VALIDATING_RESULT
+    )
+    assert controller.tick(run['id']) is RunState.COMPLETED
+    assert len(ledger.list_attempts(run['id'])) == 1
+    ledger.assert_projection_matches_replay(run['id'])
+
+
+def test_cancelled_result_with_running_job_is_converted_to_continuation(outer_loop):
+    controller, ledger, _, _ = outer_loop
+    run = controller.create_run(
+        loop_id='gesture-loop',
+        watermark='legacy-cancelled-continuation',
+        run_spec={'source': {'uri': 'file:///batch'}},
+        tasks=[
+            TaskSpec(
+                name='improve-model',
+                kind='improve-model',
+                objective='preserve an already running trial',
+                agent_profile='test-profile',
+                validator='test-validator',
+                max_attempts=1,
+                timeout_seconds=60,
+            )
+        ],
+    )
+    controller.dispatch_current_task(run['id'])
+    task, attempt, lease = _active_attempt(ledger, run['id'])
+    ledger.record_job_launch(
+        attempt_id=attempt['id'],
+        job_id='job-running-at-cancel',
+        idempotency_key='trial-1',
+        argv=['rightarm-mlops', 'train-eval-trial'],
+        status='running',
+    )
+
+    state = controller.submit_result(
+        run['id'],
+        TaskResult(
+            task_id=task['id'],
+            attempt_id=attempt['id'],
+            status='cancelled',
+            summary='Conversation context is exhausted',
+            evidence_refs=['job:job-running-at-cancel'],
+        ),
+        lease['lease_id'],
+    )
+
+    assert state is RunState.WAITING_EXTERNAL
+    assert ledger.get_run(run['id'])['state'] == 'WAITING_EXTERNAL'
+    assert ledger.get_attempt(attempt['id'])['status'] == 'WAITING_EXTERNAL'
+    assert len(ledger.list_attempts(run['id'])) == 1
+
+
+def test_continuation_dispatch_recovers_after_response_loss_and_lease_expiry(
+    outer_loop,
+):
+    controller, ledger, _, _ = outer_loop
+
+    class ResponseLostDispatcher(InMemoryConversationDispatcher):
+        failed = False
+
+        def dispatch(
+            self,
+            *,
+            context: TaskContext,
+            task: TaskSpec,
+            dispatch_key: str,
+        ) -> str:
+            conversation_id = super().dispatch(
+                context=context,
+                task=task,
+                dispatch_key=dispatch_key,
+            )
+            if ':continuation:' in dispatch_key and not self.failed:
+                self.failed = True
+                raise ConnectionError('continuation response lost')
+            return conversation_id
+
+    dispatcher = ResponseLostDispatcher()
+    controller.dispatcher = dispatcher
+    run = controller.create_run(
+        loop_id='gesture-loop',
+        watermark='continuation-dispatch-recovery',
+        run_spec={'source': {'uri': 'file:///batch'}},
+        tasks=[
+            TaskSpec(
+                name='improve-model',
+                kind='improve-model',
+                objective='recover continuation dispatch',
+                agent_profile='test-profile',
+                validator='test-validator',
+                max_attempts=1,
+                timeout_seconds=60,
+            )
+        ],
+    )
+    controller.dispatch_current_task(run['id'])
+    task, attempt, lease = _active_attempt(ledger, run['id'])
+    ledger.record_job_launch(
+        attempt_id=attempt['id'],
+        job_id='job-survives-dispatch-loss',
+        idempotency_key='trial-1',
+        argv=['rightarm-mlops', 'train-eval-trial'],
+        status='running',
+    )
+    controller.submit_result(
+        run['id'],
+        TaskResult(
+            task_id=task['id'],
+            attempt_id=attempt['id'],
+            status='waiting_external',
+            summary='continue after a controller restart',
+            evidence_refs=['job:job-survives-dispatch-loss'],
+        ),
+        lease['lease_id'],
+    )
+
+    with pytest.raises(ConnectionError, match='response lost'):
+        controller.tick(run['id'])
+    first_continuation_lease = ledger.get_lease(attempt['id'])['lease_id']
+    with ledger._connect() as connection:
+        connection.execute(
+            'UPDATE mlops_attempt_leases SET expires_at=0 WHERE attempt_id=?',
+            (attempt['id'],),
+        )
+
+    assert controller.tick(run['id']) is RunState.WAITING_FOR_AGENT
+    resumed = ledger.get_attempt(attempt['id'])
+    assert resumed['attempt_number'] == 1
+    assert ledger.get_task(task['id'])['attempt_count'] == 1
+    assert ledger.get_lease(attempt['id'])['lease_id'] != first_continuation_lease
+    first_continuation_key = f'dispatch:{attempt["id"]}:continuation:1'
+    renewal_key = f'{first_continuation_key}:lease-renewal:1'
+    assert dispatcher.conversations[renewal_key][0] == resumed['conversation_id']
+    assert (
+        dispatcher.conversations[renewal_key][1].lease_id
+        == ledger.get_lease(attempt['id'])['lease_id']
+    )
+    assert (
+        dispatcher.conversations[first_continuation_key][0]
+        != resumed['conversation_id']
+    )
+    assert [
+        event['event_type']
+        for event in ledger.list_events(run['id'])
+        if event['event_type'] == 'AttemptContinuationLeaseRotated'
+    ] == [
+        'AttemptContinuationLeaseRotated',
+        'AttemptContinuationLeaseRotated',
+    ]
+    assert len(ledger.list_attempts(run['id'])) == 1
+    ledger.assert_projection_matches_replay(run['id'])
+
+
+def test_cancelled_result_without_running_job_remains_terminal(outer_loop):
+    controller, ledger, _, _ = outer_loop
+    run = controller.create_run(
+        loop_id='gesture-loop',
+        watermark='actual-cancelled-result',
+        run_spec={'source': {'uri': 'file:///batch'}},
+        tasks=[_task('train', 'train', 'checkpoint', max_attempts=1)],
+    )
+    controller.dispatch_current_task(run['id'])
+    task, attempt, lease = _active_attempt(ledger, run['id'])
+
+    assert (
+        controller.submit_result(
+            run['id'],
+            TaskResult(
+                task_id=task['id'],
+                attempt_id=attempt['id'],
+                status='cancelled',
+                summary='operator cancelled before any job was launched',
+            ),
+            lease['lease_id'],
+        )
+        is RunState.VALIDATING_RESULT
+    )
+    assert controller.tick(run['id']) is RunState.NEEDS_INTERVENTION
+
+
 def test_agent_success_claim_without_artifact_cannot_advance(outer_loop):
     controller, ledger, _, _ = outer_loop
     run = controller.create_run(

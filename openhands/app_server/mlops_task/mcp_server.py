@@ -710,6 +710,7 @@ class DockerJobManager(LocalJobManager):
         read_only_source_roots: list[str | Path] | None = None,
         networked_job_kinds: set[str] | None = None,
         gpu_counts: dict[str, int] | None = None,
+        gpu_device_ids: dict[str, list[str]] | None = None,
         container_python: str = 'python',
         memory_limit: str = '128g',
         nano_cpus: int = 32_000_000_000,
@@ -749,9 +750,14 @@ class DockerJobManager(LocalJobManager):
         ]
         self.networked_job_kinds = set(networked_job_kinds or set())
         self.gpu_counts = dict(gpu_counts or {})
+        self.gpu_device_ids = {
+            kind: list(device_ids)
+            for kind, device_ids in (gpu_device_ids or {}).items()
+        }
         for label, values in (
             ('network', self.networked_job_kinds),
             ('GPU', set(self.gpu_counts)),
+            ('GPU device', set(self.gpu_device_ids)),
         ):
             invalid = values - self.allowed_job_kinds
             if invalid:
@@ -763,6 +769,22 @@ class DockerJobManager(LocalJobManager):
             for count in self.gpu_counts.values()
         ):
             raise ValueError('Docker GPU counts must be positive integers')
+        for kind, device_ids in self.gpu_device_ids.items():
+            if kind not in self.gpu_counts:
+                raise ValueError(
+                    f'Docker GPU devices for {kind!r} require an operator-owned '
+                    'GPU count'
+                )
+            if (
+                not device_ids
+                or len(device_ids) != self.gpu_counts[kind]
+                or len(set(device_ids)) != len(device_ids)
+                or any(not device_id.isdigit() for device_id in device_ids)
+            ):
+                raise ValueError(
+                    f'Docker GPU devices for {kind!r} must be unique numeric '
+                    'device ids matching its GPU count'
+                )
         if not container_python:
             raise ValueError('container Python executable must not be empty')
         if nano_cpus <= 0:
@@ -818,6 +840,7 @@ class DockerJobManager(LocalJobManager):
         if image is None:
             raise ValueError(f'Docker image catalog has no image for {kind!r}')
         gpu_count = self.gpu_counts.get(kind)
+        gpu_device_ids = self.gpu_device_ids.get(kind)
         if kind in self.GPU_JOB_KINDS:
             try:
                 requested_gpus = int(argv[argv.index('--gpus') + 1])
@@ -849,6 +872,7 @@ class DockerJobManager(LocalJobManager):
                 'idempotency_key': idempotency_key,
                 'argv': command,
                 'image': image,
+                'gpu_device_ids': gpu_device_ids,
                 'output_dir': str(output_dir),
             }
             request_path = job_dir / 'request.json'
@@ -918,8 +942,13 @@ class DockerJobManager(LocalJobManager):
                 },
             }
             if gpu_count is not None:
+                request_options: dict[str, Any] = {'capabilities': [['gpu']]}
+                if gpu_device_ids is None:
+                    request_options['count'] = gpu_count
+                else:
+                    request_options['device_ids'] = gpu_device_ids
                 run_options['device_requests'] = [
-                    docker.types.DeviceRequest(count=gpu_count, capabilities=[['gpu']])
+                    docker.types.DeviceRequest(**request_options)
                 ]
             container = self.client.containers.run(**run_options)
             process_path = job_dir / 'process.json'
@@ -1459,8 +1488,8 @@ def create_gateway_mcp_server(
             raise ValueError('result belongs to a different task attempt')
         attempt = controller.ledger.get_attempt(attempt_id)
         task = controller.ledger.get_task(attempt['task_id'])
-        controller.submit_result(task['run_id'], parsed, lease_id)
-        return {'accepted': True, 'run_state': 'VALIDATING_RESULT'}
+        run_state = controller.submit_result(task['run_id'], parsed, lease_id)
+        return {'accepted': True, 'run_state': run_state.value}
 
     return server
 

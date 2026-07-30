@@ -445,8 +445,8 @@ def create_app(
     ):
         if request.result.attempt_id != attempt_id:
             raise HTTPException(status_code=400, detail='attempt id mismatch')
-        controller.submit_result(request.run_id, request.result, lease_id)
-        return {'accepted': True, 'run_state': 'VALIDATING_RESULT'}
+        run_state = controller.submit_result(request.run_id, request.result, lease_id)
+        return {'accepted': True, 'run_state': run_state.value}
 
     @app.post('/api/v1/mlops/attempts/{attempt_id}/candidates')
     def register_artifact_candidate(

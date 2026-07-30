@@ -64,6 +64,12 @@ def _parser() -> argparse.ArgumentParser:
         default=[],
         metavar='KIND=COUNT',
     )
+    serve.add_argument(
+        '--docker-gpu-devices',
+        action='append',
+        default=[],
+        metavar='KIND=DEVICE,DEVICE',
+    )
     serve.add_argument('--docker-memory-limit', default='128g')
     serve.add_argument('--docker-nano-cpus', type=int, default=32_000_000_000)
     serve.add_argument('--incoming', type=Path)
@@ -180,6 +186,7 @@ def main(argv: list[str] | None = None) -> int:
                 'read_only_source_roots': args.docker_source_root,
                 'networked_job_kinds': set(args.docker_network_job_kind),
                 'gpu_counts': _kind_int_map(args.docker_gpu_count),
+                'gpu_device_ids': _kind_device_map(args.docker_gpu_devices),
                 'container_python': args.docker_container_python,
                 'memory_limit': args.docker_memory_limit,
                 'nano_cpus': args.docker_nano_cpus,
@@ -408,6 +415,28 @@ def _kind_int_map(values: list[str]) -> dict[str, int]:
     return result
 
 
+def _kind_device_map(values: list[str]) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {}
+    for value in values:
+        try:
+            kind, raw_device_ids = value.split('=', 1)
+        except ValueError as exc:
+            raise ValueError(
+                f'Docker GPU devices require KIND=DEVICE,DEVICE, got {value!r}'
+            ) from exc
+        device_ids = raw_device_ids.split(',')
+        if (
+            not kind
+            or kind in result
+            or not device_ids
+            or len(set(device_ids)) != len(device_ids)
+            or any(not device_id.isdigit() for device_id in device_ids)
+        ):
+            raise ValueError(f'invalid Docker GPU devices: {value!r}')
+        result[kind] = device_ids
+    return result
+
+
 def _resolve_openhands_token(value: str | None, path: Path | None) -> str | None:
     if value is not None and path is not None:
         raise ValueError(
@@ -489,7 +518,7 @@ def _reconcile_inactive_jobs(
         except KeyError:
             _cancel_attempt_jobs(controller, job_manager, attempt_id, logger)
             continue
-        if attempt['status'] != 'RUNNING':
+        if attempt['status'] not in {'RUNNING', 'WAITING_EXTERNAL'}:
             _cancel_attempt_jobs(controller, job_manager, attempt_id, logger)
 
 
@@ -511,25 +540,31 @@ def _run_reconciler(
                     continue
                 if row['state'] in {state.value for state in TERMINAL_RUN_STATES}:
                     continue
-                task = controller.ledger.current_task(row['id'])
-                expired_attempt = (
-                    controller.ledger.latest_attempt(task['id'])
-                    if task is not None
-                    else None
-                )
-                recovered = controller.reconcile_expired_attempt(row['id'])
-                if (
-                    recovered
-                    and job_manager is not None
-                    and expired_attempt is not None
-                ):
-                    _cancel_attempt_jobs(
-                        controller,
-                        job_manager,
-                        expired_attempt['id'],
-                        logger,
+                try:
+                    task = controller.ledger.current_task(row['id'])
+                    expired_attempt = (
+                        controller.ledger.latest_attempt(task['id'])
+                        if task is not None
+                        else None
                     )
-                controller.tick(row['id'])
+                    recovered = controller.reconcile_expired_attempt(row['id'])
+                    if (
+                        recovered
+                        and job_manager is not None
+                        and expired_attempt is not None
+                    ):
+                        _cancel_attempt_jobs(
+                            controller,
+                            job_manager,
+                            expired_attempt['id'],
+                            logger,
+                        )
+                    controller.tick(row['id'])
+                except Exception:  # noqa: BLE001 - isolate one broken Run
+                    logger.exception(
+                        'manual Run reconciliation failed for %s',
+                        row['id'],
+                    )
         except Exception:  # noqa: BLE001 - keep the reconciler alive
             logger.exception('manual Run reconciliation failed')
         stop.wait(interval_seconds)

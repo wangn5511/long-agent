@@ -13,6 +13,8 @@ Architecture (per the design spec in rgb_stgcn.txt):
     -> rgb_feat: (N, 96)
 """
 
+from __future__ import annotations
+
 from typing import Optional
 
 import torch

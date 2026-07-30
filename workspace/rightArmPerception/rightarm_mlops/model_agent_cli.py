@@ -182,7 +182,7 @@ def _parser() -> argparse.ArgumentParser:
     improve.add_argument(
         '--batch-size', type=int, choices=(4, 8, 16, 32, 64), default=32
     )
-    improve.add_argument('--workers', type=_bounded_integer(0, 32), default=12)
+    improve.add_argument('--workers', type=_bounded_integer(0, 32), default=2)
     improve.add_argument(
         '--gpus',
         type=_bounded_integer(1, 8),

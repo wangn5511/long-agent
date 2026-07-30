@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
-  <title>model-agent LoopEngine Architecture</title>
+  <title>model-agent LoopEngine 项目架构探索器</title>
   <style>
     :root {
       color-scheme: light dark;
@@ -392,11 +392,160 @@
     .delivery-item {
       min-width: 0;
       padding: 11px 14px;
+      border: 0;
+      color: var(--foreground);
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+      transition: background .16s ease, transform .16s ease;
     }
 
     .delivery-item + .delivery-item { border-left: 1px solid var(--border); }
     .delivery-item strong { display: block; margin-bottom: 2px; font-size: 13px; font-weight: 550; }
     .delivery-item span { color: var(--muted); font-size: 11px; }
+    .delivery-item:hover { background: var(--panel); transform: translateY(-1px); }
+    .delivery-item:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+
+    .visual-gallery {
+      margin-top: 24px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border-strong);
+    }
+
+    .visual-heading {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 12px;
+    }
+
+    .visual-heading h2 {
+      font-size: clamp(20px, 2vw, 30px);
+      font-weight: 560;
+      line-height: 1.2;
+      letter-spacing: -.025em;
+    }
+
+    .visual-heading p {
+      max-width: 560px;
+      color: var(--muted);
+      font-size: 12px;
+      text-align: right;
+    }
+
+    .visual-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .visual-card {
+      min-width: 0;
+      padding: 0;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--foreground);
+      background: var(--panel);
+      text-align: left;
+      cursor: zoom-in;
+      transition: border-color .16s ease, transform .16s ease, box-shadow .16s ease;
+    }
+
+    .visual-card:hover {
+      border-color: var(--primary);
+      box-shadow: 0 12px 34px rgba(0, 0, 0, .12);
+      transform: translateY(-2px);
+    }
+
+    .visual-card:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+    }
+
+    .visual-card img {
+      display: block;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      object-fit: cover;
+      border-bottom: 1px solid var(--border);
+      background: #071a32;
+    }
+
+    .visual-copy {
+      display: block;
+      padding: 11px 12px 12px;
+    }
+
+    .visual-copy strong {
+      display: block;
+      font-size: 13px;
+      font-weight: 560;
+    }
+
+    .visual-copy span {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.45;
+    }
+
+    .lightbox {
+      position: fixed;
+      inset: 0;
+      z-index: 80;
+      display: grid;
+      place-items: center;
+      padding: 26px;
+      background: rgba(7, 13, 22, .9);
+      opacity: 0;
+      visibility: hidden;
+      backdrop-filter: blur(10px);
+      transition: opacity .18s ease, visibility .18s;
+    }
+
+    .lightbox.is-open {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    .lightbox-figure {
+      width: min(1320px, 96vw);
+      margin: 0;
+    }
+
+    .lightbox img {
+      display: block;
+      width: 100%;
+      max-height: 84vh;
+      object-fit: contain;
+      border: 1px solid rgba(255, 255, 255, .16);
+      border-radius: 16px;
+      background: #071a32;
+      box-shadow: 0 30px 100px rgba(0, 0, 0, .5);
+    }
+
+    .lightbox figcaption {
+      margin-top: 10px;
+      color: rgba(255, 255, 255, .72);
+      font-size: 12px;
+      text-align: center;
+    }
+
+    .lightbox-close {
+      position: absolute;
+      top: 16px;
+      right: 18px;
+      width: 38px;
+      height: 38px;
+      border: 1px solid rgba(255, 255, 255, .2);
+      border-radius: 11px;
+      color: #fff;
+      background: rgba(255, 255, 255, .08);
+      cursor: pointer;
+    }
 
     .graph-evolution {
       margin-top: 24px;
@@ -757,15 +906,165 @@
     .future-mark { color: var(--future); }
 
     .selected-detail {
-      min-height: 48px;
-      display: grid;
-      align-content: center;
-      padding-left: 18px;
-      border-left: 1px solid var(--border);
+      position: fixed;
+      top: 18px;
+      right: 18px;
+      z-index: 40;
+      width: min(430px, calc(100vw - 36px));
+      max-height: calc(100vh - 36px);
+      overflow: auto;
+      padding: 22px;
+      border: 1px solid var(--border-strong);
+      border-radius: 18px;
+      background: var(--panel-strong);
+      box-shadow: 0 26px 90px rgba(0, 0, 0, .28);
+      opacity: 0;
+      visibility: hidden;
+      transform: translateX(28px);
+      transition: opacity .18s ease, transform .2s ease, visibility .18s;
     }
 
-    .selected-detail strong { font-size: 12px; font-weight: 550; }
-    .selected-detail p { color: var(--muted); font-size: 11px; }
+    #architecture.detail-open .selected-detail {
+      opacity: 1;
+      visibility: visible;
+      transform: translateX(0);
+    }
+
+    .detail-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .detail-eyebrow {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--primary);
+      font-family: var(--mono);
+      font-size: 9px;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+
+    .selected-detail strong {
+      display: block;
+      font-size: 20px;
+      font-weight: 600;
+      line-height: 1.25;
+    }
+
+    .detail-close {
+      flex: 0 0 auto;
+      width: 30px;
+      height: 30px;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      color: var(--foreground);
+      background: var(--panel);
+      cursor: pointer;
+    }
+
+    .detail-close:hover { border-color: var(--primary); }
+
+    .detail-summary {
+      margin-top: 15px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 17px;
+    }
+
+    .detail-field {
+      min-width: 0;
+      padding: 10px 11px;
+      border-radius: 11px;
+      background: var(--panel);
+    }
+
+    .detail-field span {
+      display: block;
+      color: var(--muted);
+      font-size: 9px;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+    }
+
+    .detail-field b {
+      display: block;
+      margin-top: 4px;
+      overflow-wrap: anywhere;
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 550;
+    }
+
+    .detail-section {
+      margin-top: 18px;
+    }
+
+    .detail-section h3 {
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 500;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .detail-points {
+      display: grid;
+      gap: 7px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .detail-points li {
+      position: relative;
+      padding-left: 13px;
+      color: var(--foreground);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .detail-points li::before {
+      position: absolute;
+      top: .62em;
+      left: 0;
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: var(--primary);
+      content: "";
+    }
+
+    .detail-hint {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      z-index: 25;
+      padding: 9px 12px;
+      border: 1px solid var(--border-strong);
+      border-radius: 999px;
+      color: var(--muted);
+      background: var(--panel-strong);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, .12);
+      font-size: 11px;
+      pointer-events: none;
+      transition: opacity .18s ease;
+    }
+
+    #architecture.detail-open .detail-hint { opacity: 0; }
 
     @media (max-width: 1080px) {
       .architecture-grid { grid-template-columns: 1fr; gap: 20px; }
@@ -774,6 +1073,9 @@
       .delivery-rail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .delivery-item:nth-child(3) { border-left: 0; border-top: 1px solid var(--border); }
       .delivery-item:nth-child(4) { border-top: 1px solid var(--border); }
+      .visual-grid { grid-template-columns: 1fr; }
+      .visual-heading { align-items: start; flex-direction: column; gap: 6px; }
+      .visual-heading p { text-align: left; }
       .graph-heading { grid-template-columns: 1fr; gap: 8px; }
       .graph-evolution-grid { grid-template-columns: 1fr; }
       .graph-panel + .graph-panel { padding: 18px 4px 0; border-left: 0; border-top: 1px solid var(--border); }
@@ -792,7 +1094,13 @@
       .migration-step:not(:last-child)::after { content: "↓"; top: auto; right: 50%; bottom: -15px; transform: translateX(50%); }
       .primitive-row { grid-template-columns: 72px 1fr; }
       .footer { grid-template-columns: 1fr; }
-      .selected-detail { padding: 10px 0 0; border-left: 0; border-top: 1px solid var(--border); }
+      .selected-detail {
+        top: auto;
+        right: 10px;
+        bottom: 10px;
+        width: calc(100vw - 20px);
+        max-height: min(74vh, 620px);
+      }
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -804,7 +1112,7 @@
       :root { color-scheme: light; }
       body { background: #fff; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
       .page { width: 100%; padding: 0; }
-      .top-actions, .toolbar { display: none; }
+      .top-actions, .toolbar, .selected-detail, .detail-hint, .lightbox { display: none; }
       .architecture-grid { grid-template-columns: .95fr 1.08fr 1.08fr; gap: 16px; }
       .architecture-column + .architecture-column { padding-left: 16px; border-left: 1px solid var(--border); border-top: 0; }
       .graph-heading { grid-template-columns: .7fr 1.3fr; }
@@ -818,9 +1126,9 @@
   <main class="page" id="architecture" data-lens="all">
     <header class="topbar">
       <div>
-        <p class="eyebrow">model-agent / rightArmPerception</p>
-        <h1>LoopEngine：从业务输入到可信模型制品</h1>
-        <p class="subtitle">确定性外环控制生命周期，OpenHands 处理单个任务中的不确定性，rightArm Job 输出可独立验证的证据与制品。</p>
+        <p class="eyebrow">model-agent / interactive architecture explorer</p>
+        <h1>LoopEngine 项目架构探索器</h1>
+        <p class="subtitle">点击任一模块，查看它的职责、关键机制、实现状态和代码位置。可按业务任务、控制流、验证与边界切换观察维度。</p>
       </div>
       <div class="top-actions">
         <button type="button" class="btn" id="themeButton">切换主题</button>
@@ -879,11 +1187,11 @@
         <p class="column-note">Agent 负责局部推理；Controller、Validator 和 Ledger 共同维护系统事实</p>
 
         <div class="flow-stack">
-          <button type="button" class="node control-node" data-domain="control" data-title="LoopController" data-detail="Controller 是跨任务状态的唯一 owner，负责当前 Task、Attempt、Lease、预算、重试、停止、恢复以及 Release/Deployment 状态。">
-            <span class="node-kicker">OUTER LOOP</span><strong>LoopController + Reconciler</strong><span>Run / Task / Attempt · Retry / Stop</span>
+          <button type="button" class="node control-node" data-domain="control" data-title="LoopController" data-detail="Controller 是跨任务状态的唯一 owner，负责当前 Task、Attempt、Lease、Continuation、预算、重试、停止、恢复以及 Release/Deployment 状态。">
+            <span class="node-kicker">OUTER LOOP</span><strong>LoopController + Reconciler</strong><span>Run / Task / Attempt · Continue / Retry / Stop</span>
           </button>
-          <div class="connector"><span>创建新 Attempt + Lease</span><b aria-hidden="true">↓</b></div>
-          <button type="button" class="node agent-node" data-domain="control" data-title="OpenHands Task Agent" data-detail="每个 Attempt 创建新的 OpenHands Conversation，只获得当前 TaskContext；它可以理解任务、观察日志和提出建议，但不能推进全局状态。">
+          <div class="connector"><span>创建或续接 Attempt + Lease</span><b aria-hidden="true">↓</b></div>
+          <button type="button" class="node agent-node" data-domain="control" data-title="OpenHands Task Agent" data-detail="Conversation 是可轮换的执行 Episode；同一个 Attempt 可以通过新 Lease 创建多个 Conversation。Agent 只获得当前 TaskContext，可以理解任务、观察日志和提出建议，但不能推进全局状态。">
             <span class="node-kicker">INNER LOOP</span><strong>OpenHands Task Agent</strong><span>TaskContext · Reason · Act · Observe</span>
           </button>
           <div class="connector"><span>task-local MCP 能力</span><b aria-hidden="true">↓</b></div>
@@ -905,6 +1213,7 @@
           </button>
           <div class="return-loop">
             <span><strong>accepted</strong> → 下一 Task / Run 完成</span>
+            <span><strong>waiting_external</strong> → 同一 Attempt / 新 Conversation</span>
             <span><strong>retryable</strong> → 新 Attempt + 新 Conversation</span>
             <span><strong>terminal / needs decision</strong> → 停止或人工介入</span>
           </div>
@@ -952,10 +1261,34 @@
     </div>
 
     <section class="delivery-rail" aria-label="当前交付摘要">
-      <div class="delivery-item"><strong>5 种 Run 入口</strong><span>data · train · full · export · improve</span></div>
-      <div class="delivery-item"><strong>完整数据闭环</strong><span>COS · dataset · review · deterministic merge</span></div>
-      <div class="delivery-item"><strong>有界模型改进</strong><span>max 4 trials · patience · deterministic selection</span></div>
-      <div class="delivery-item"><strong>历史审计基线</strong><span>281 OpenHands tests + 8 rightArm adapter tests</span></div>
+      <button type="button" class="delivery-item detail-trigger" data-title="五种 Run 入口" data-domain="business" data-detail="data、train、full、export 和 improve 从不同业务阶段进入，但最终都被封装成同一种不可变、可审计的 Run。"><strong>5 种 Run 入口</strong><span>data · train · full · export · improve</span></button>
+      <button type="button" class="delivery-item detail-trigger" data-title="Conversation Continuation" data-domain="control" data-detail="Job 仍运行时，旧 Conversation 可以被 fencing；外环保持 Attempt 和 Job ownership，轮换 Lease 并创建新 Conversation 继续观察。"><strong>Conversation 可续接</strong><span>WAITING_EXTERNAL · new Lease · same Attempt</span></button>
+      <button type="button" class="delivery-item detail-trigger" data-title="人工有效占用测算" data-domain="business" data-detail="按 12 小时模型任务窗口初步测算，只统计启动、异常处理、阶段切换和结果整理：传统人工约 100 分钟，LoopEngine 约 60 分钟，预计降低约 40%。首次长稳运行因 cancelled 中断，仍需完整实测校准。"><strong>人工占用预计降低 40%</strong><span>100 min → 60 min · 流程测算</span></button>
+      <button type="button" class="delivery-item detail-trigger" data-title="当前交付边界" data-domain="safety" data-detail="Staging LoopEngine 已实现，核心生命周期和安全边界已有本地与隔离测试证据；生产闭环仍需真实 GPU 镜像、RK3588、registry、fleet/OTA 和端到端验收。"><strong>当前：Staging 已实现</strong><span>生产闭环仍需真实基础设施验收</span></button>
+    </section>
+
+    <section class="visual-gallery" aria-labelledby="visual-title">
+      <div class="visual-heading">
+        <div>
+          <p class="eyebrow">CORE MECHANISMS / VISUAL EXPLAINERS</p>
+          <h2 id="visual-title">核心机制图解</h2>
+        </div>
+        <p>点击图片可全屏查看。三张图分别回答：如何观察长任务、如何跨 Conversation 续接、如何把 Agent 提案变成可信事实。</p>
+      </div>
+      <div class="visual-grid">
+        <button type="button" class="visual-card" data-visual="assets/loopengine/observation-engineering.png" data-caption="Observation Engineering：统一状态、有界观察，以及 Agent 侧 Freshness 与 Ledger 侧 Deduplication。">
+          <img src="assets/loopengine/observation-engineering.png" alt="Observation Engineering：Local Process 与 Docker Container 统一为 Job Observation，并区分 Observation Freshness 与 Event Deduplication">
+          <span class="visual-copy"><strong>01 · Observation Engineering</strong><span>统一 Job 状态 · 有界 observe · Freshness / Deduplication</span></span>
+        </button>
+        <button type="button" class="visual-card" data-visual="assets/loopengine/external-state-continuation.png" data-caption="External State & Continuation：旧 Conversation 被 fencing，Job 与 Attempt 保持不变，新 Lease 和新 Conversation 继续观察。">
+          <img src="assets/loopengine/external-state-continuation.png" alt="外部状态与 Conversation Continuation：同一个 Attempt 和 Job 在 Conversation 轮换后继续运行">
+          <span class="visual-copy"><strong>02 · External State & Continuation</strong><span>WAITING_EXTERNAL · Lease 轮换 · Job ownership 不变</span></span>
+        </button>
+        <button type="button" class="visual-card" data-visual="assets/loopengine/proposal-validation-effectively-once.png" data-caption="Proposal → Validated Fact：Validator 独立验收，at-least-once reconcile 在领域层形成 effectively-once 效果。">
+          <img src="assets/loopengine/proposal-validation-effectively-once.png" alt="Agent TaskResult proposal 经过 Independent Validator 后成为 Validated checkpoint，并通过幂等机制实现 effectively-once 领域效果">
+          <span class="visual-copy"><strong>03 · Proposal → Validated Fact</strong><span>Independent Validator · Outbox · effectively-once</span></span>
+        </button>
+      </div>
     </section>
 
     <section class="graph-evolution" aria-labelledby="graph-title">
@@ -1054,11 +1387,33 @@
         <span class="artifact-mark"><i class="legend-mark"></i>Artifact / Fact</span>
         <span class="future-mark"><i class="legend-mark"></i>后续演进</span>
       </div>
-      <div class="selected-detail" aria-live="polite">
-        <strong id="detailTitle">选择任一节点</strong>
-        <p id="detailText">查看它在 LoopEngine 中承担的职责、证据与边界。</p>
-      </div>
+      <aside class="selected-detail" id="detailPanel" aria-live="polite" aria-labelledby="detailTitle">
+        <div class="detail-head">
+          <div>
+            <span class="detail-eyebrow" id="detailDomain">PROJECT COMPONENT</span>
+            <strong id="detailTitle">选择任一节点</strong>
+          </div>
+          <button type="button" class="detail-close" id="detailClose" aria-label="关闭详情">×</button>
+        </div>
+        <p class="detail-summary" id="detailText">查看它在 LoopEngine 中承担的职责、证据与边界。</p>
+        <div class="detail-grid">
+          <div class="detail-field"><span>实现状态</span><b id="detailStatus">—</b></div>
+          <div class="detail-field"><span>主要代码</span><b id="detailCode">—</b></div>
+        </div>
+        <div class="detail-section">
+          <h3>关键点</h3>
+          <ul class="detail-points" id="detailPoints"></ul>
+        </div>
+      </aside>
     </footer>
+    <div class="detail-hint" aria-hidden="true">点击任一模块查看详情</div>
+    <div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="核心机制大图">
+      <button type="button" class="lightbox-close" id="lightboxClose" aria-label="关闭大图">×</button>
+      <figure class="lightbox-figure">
+        <img id="lightboxImage" alt="">
+        <figcaption id="lightboxCaption"></figcaption>
+      </figure>
+    </div>
   </main>
 
   <script>
@@ -1066,10 +1421,149 @@
       const root = document.getElementById('architecture');
       const lensButtons = Array.from(root.querySelectorAll('[data-lens]'));
       const nodes = Array.from(root.querySelectorAll('.node'));
+      const detailTriggers = Array.from(root.querySelectorAll('.node, .detail-trigger'));
+      const detailPanel = document.getElementById('detailPanel');
       const detailTitle = document.getElementById('detailTitle');
       const detailText = document.getElementById('detailText');
+      const detailDomain = document.getElementById('detailDomain');
+      const detailStatus = document.getElementById('detailStatus');
+      const detailCode = document.getElementById('detailCode');
+      const detailPoints = document.getElementById('detailPoints');
+      const detailClose = document.getElementById('detailClose');
       const themeButton = document.getElementById('themeButton');
       const fullscreenButton = document.getElementById('fullscreenButton');
+      const visualCards = Array.from(root.querySelectorAll('[data-visual]'));
+      const lightbox = document.getElementById('lightbox');
+      const lightboxImage = document.getElementById('lightboxImage');
+      const lightboxCaption = document.getElementById('lightboxCaption');
+      const lightboxClose = document.getElementById('lightboxClose');
+      let lastTrigger = null;
+      let lastVisual = null;
+
+      const domainLabels = {
+        business: 'BUSINESS & JOB',
+        control: 'CONTROL & RUNTIME',
+        safety: 'VALIDATION & FACT',
+      };
+
+      const componentDetails = {
+        'Trigger / Request': {
+          code: 'manual_runs.py · api.py',
+          points: ['支持 request ID、watermark 和 dry-run', '重复请求通过幂等键对齐到同一 Run', '正式触发前校验输入身份与完整性'],
+        },
+        data: {
+          code: 'manual_runs.py · rightarm-gesture-loop-v1-loop.yaml',
+          points: ['检查并落盘封口 COS 批次', '构建增量训练数据集', '审查分布后执行确定性合并'],
+        },
+        train: {
+          code: 'manual_runs.py · pipeline.py',
+          points: ['固定 sealed dataset 与 base model', '训练后进行独立评测', '通过门禁后生成 ONNX / RKNN'],
+        },
+        full: {
+          code: 'manual_runs.py · specs/',
+          points: ['数据、训练、评测和打包处于同一 Run', '保留从业务批次到模型包的完整 lineage', '各阶段失败由统一 policy 处理'],
+        },
+        export: {
+          code: 'manual_runs.py · evaluation.py',
+          points: ['从已有 checkpoint 与不可变数据集开始', '重新执行独立评测', '输出转换制品与 parity report'],
+        },
+        improve: {
+          code: 'manual_runs.py · model_improvement.py',
+          points: ['固定 incumbent、数据集与评测口径', '默认最多 4 个受限 trials', '确定性代码执行 winner selection'],
+        },
+        '输入检查与封存': {
+          code: 'manual_runs.py · artifact_store.py',
+          points: ['本地文件先进入私有导入区', '计算 SHA-256 并封存为 Artifact', 'Task 只接收 Artifact ID，不接收任意路径'],
+        },
+        MLOpsRun: {
+          code: 'models.py · spec.py · specs/',
+          points: ['固定目标、输入、Task 序列与门禁', '包含重试、时长、成本和制品预算', '作为完整审计与恢复边界'],
+        },
+        LoopController: {
+          code: 'controller.py · cli.py',
+          points: ['Run、Task、Attempt 生命周期的唯一 owner', '默认由 Reconciler 周期性调用 tick()', '根据 Validator 与 policy 决定推进、续接、重试或停止'],
+        },
+        'OpenHands Task Agent': {
+          code: 'dispatcher.py · agentic-mlops-task-agent/SKILL.md',
+          points: ['单个 Conversation 只处理当前 TaskContext', '可以理解、诊断和提出受限建议', '不能直接推进 Run、Release 或 Deployment 状态'],
+        },
+        'rightarm-mlops Job': {
+          code: 'app_server/mlops_task/ · rightarm_mlops/',
+          points: ['在 Local、Docker 或 Hybrid Executor 中运行', '只接受 allowlisted Job 与受控参数', '输出机器 manifest、报告、日志和制品'],
+        },
+        TaskResult: {
+          code: 'models.py · controller.py',
+          points: ['Agent 提交的只是结构化 proposal', '包含候选 Artifact、metrics、evidence 与 lineage', '必须通过独立 Validator 才能成为事实'],
+        },
+        'Independent Validator': {
+          code: 'validators.py · rightarm_validators.py',
+          points: ['检查 completion contract 与受管输出', '重新验证 hash、schema、指标门禁和 lineage', '返回 accepted、retryable、terminal 或 needs_decision'],
+        },
+        'Ledger + Artifact CAS': {
+          code: 'ledger.py · artifact_store.py',
+          points: ['Ledger 保存生命周期、事件和审计事实', 'CAS 以内容哈希保存不可变制品', 'Conversation 不承担跨任务记忆职责'],
+        },
+        'inspect-data': {
+          code: 'rightarm_mlops/cos_materialize.py',
+          points: ['检查 COS URI、manifest 与 _SUCCESS', '验证对象数量、大小和 SHA-256', '输出 raw dataset 与 validation report'],
+        },
+        'build-dataset': {
+          code: 'rightarm_mlops/dataset.py',
+          points: ['安全解包并检查标注引用', '执行视频切片与 RTM 特征提取', '按 subject / device / session 分组划分'],
+        },
+        'review-dataset-distribution': {
+          code: 'rightarm_mlops/dataset_review.py',
+          points: ['检查重复、标签冲突和 split 泄漏', '计算类别分布、NONE 占比与 JSD', '仅在 merge-all-unique 时允许合并'],
+        },
+        'train-challenger': {
+          code: 'rightarm_mlops/pipeline.py',
+          points: ['固定 dataset、base model、config 和 code revision', '约束 GPU、batch size、worker、seed 与 epoch', '输出 best / last checkpoint、日志和 metrics'],
+        },
+        'evaluate-challenger': {
+          code: 'rightarm_mlops/evaluation.py',
+          points: ['不采信训练日志中的自报最佳指标', '基于不可变数据集重新评测', '应用 macro-F1、类别 recall 与 NONE FAR 门禁'],
+        },
+        'package-rknn': {
+          code: 'rightarm_mlops/pipeline.py',
+          points: ['PyTorch checkpoint 转 ONNX 与 RKNN', '使用真实验证 pipeline 生成 calibration 数据', '输出 top-1 与 gate parity report'],
+        },
+        '有界模型改进': {
+          code: 'rightarm_mlops/model_improvement.py',
+          points: ['Agent 只在 allowlist 策略族中提出假设', '试验预算、patience 和停止原因有明确边界', '没有合规提升时继续保留 champion'],
+        },
+        'Dataset Artifact': {
+          code: 'artifact_store.py · dataset_review.py',
+          points: ['数据集、分布报告和合并计划均有 SHA-256', '输出 bundle 使用可移植相对路径', '基线与增量输入到合并输出的 lineage 闭合'],
+        },
+        'Model Artifact': {
+          code: 'artifact_store.py · rightarm_validators.py',
+          points: ['Checkpoint、评测、ONNX、RKNN 统一封存', '记录生产 Attempt 与输入 Artifact', '转换产物必须携带 parity evidence'],
+        },
+        'Run Audit': {
+          code: 'api.py · ledger.py',
+          points: ['查询当前步骤、Attempt 与失败记录', '追踪 Validator disposition 与制品身份', '解释生命周期决策及其证据'],
+        },
+        '五种 Run 入口': {
+          code: 'manual_runs.py',
+          status: '已实现',
+          points: ['从五个业务阶段创建同一种 Run', '全部支持 dry-run', '输入统一封存后再交给 Task'],
+        },
+        'Conversation Continuation': {
+          code: 'controller.py · ledger.py · dispatcher.py',
+          status: '已实现',
+          points: ['WAITING_EXTERNAL 保留 Attempt 和 Job ownership', '旧 Conversation fencing 后轮换 Lease', '新 Conversation 先观察已有 Job，不创建新 trial'],
+        },
+        '人工有效占用测算': {
+          code: '文档 5.2 · 待完整实测校准',
+          status: '初步测算',
+          points: ['统计启动、异常处理、阶段切换和结果整理', '传统人工约 100 分钟，LoopEngine 约 60 分钟', '首次长稳运行 cancelled，不能作为验收结论'],
+        },
+        '当前交付边界': {
+          code: 'completion-audit.md',
+          status: 'Staging',
+          points: ['核心生命周期与安全边界已有测试证据', '生产闭环仍需真实 GPU 与 RK3588', 'registry、fleet / OTA、线上监控仍待接入'],
+        },
+      };
 
       function setLens(lens) {
         root.dataset.lens = lens;
@@ -1082,13 +1576,79 @@
         button.addEventListener('click', () => setLens(button.dataset.lens || 'all'));
       });
 
-      nodes.forEach((node) => {
-        node.addEventListener('click', () => {
-          nodes.forEach((candidate) => candidate.classList.remove('is-selected'));
-          node.classList.add('is-selected');
-          detailTitle.textContent = node.dataset.title || node.textContent.trim();
-          detailText.textContent = node.dataset.detail || '';
-        });
+      function fallbackMeta(trigger, title) {
+        const isFuture = trigger.classList.contains('future-node') || /Graph|Node|Edge|Branch|Join|阶段/.test(title);
+        return {
+          code: isFuture ? 'GraphEngine 规划设计' : '查看对应模块代码索引',
+          status: isFuture ? '规划中' : '已实现',
+          points: [
+            '点击相邻节点可以继续沿运行关系查看',
+            '颜色表示控制、Agent、验证、制品或后续演进',
+            '顶部观察维度可以突出不同职责边界',
+          ],
+        };
+      }
+
+      function showDetail(trigger) {
+        const title = trigger.dataset.title || trigger.textContent.trim();
+        const meta = { ...fallbackMeta(trigger, title), ...(componentDetails[title] || {}) };
+        nodes.forEach((candidate) => candidate.classList.remove('is-selected'));
+        detailTriggers.forEach((candidate) => candidate.setAttribute('aria-expanded', 'false'));
+        if (trigger.classList.contains('node')) trigger.classList.add('is-selected');
+        trigger.setAttribute('aria-expanded', 'true');
+        lastTrigger = trigger;
+
+        detailTitle.textContent = title;
+        detailText.textContent = trigger.dataset.detail || '';
+        detailDomain.textContent = domainLabels[trigger.dataset.domain] || 'PROJECT COMPONENT';
+        detailStatus.textContent = meta.status || (trigger.classList.contains('future-node') ? '规划中' : '已实现');
+        detailCode.textContent = meta.code;
+        detailPoints.replaceChildren(...meta.points.map((point) => {
+          const item = document.createElement('li');
+          item.textContent = point;
+          return item;
+        }));
+        root.classList.add('detail-open');
+        history.replaceState(null, '', `#${encodeURIComponent(title)}`);
+      }
+
+      function closeDetail({ restoreFocus = true } = {}) {
+        root.classList.remove('detail-open');
+        nodes.forEach((candidate) => candidate.classList.remove('is-selected'));
+        detailTriggers.forEach((candidate) => candidate.setAttribute('aria-expanded', 'false'));
+        history.replaceState(null, '', location.pathname + location.search);
+        if (restoreFocus && lastTrigger) lastTrigger.focus();
+      }
+
+      detailTriggers.forEach((trigger) => {
+        trigger.setAttribute('aria-expanded', 'false');
+        trigger.addEventListener('click', () => showDetail(trigger));
+      });
+
+      detailClose.addEventListener('click', () => closeDetail());
+
+      function openVisual(card) {
+        lastVisual = card;
+        lightboxImage.src = card.dataset.visual;
+        lightboxImage.alt = card.querySelector('img')?.alt || '';
+        lightboxCaption.textContent = card.dataset.caption || '';
+        lightbox.classList.add('is-open');
+        lightboxClose.focus();
+      }
+
+      function closeVisual() {
+        lightbox.classList.remove('is-open');
+        lightboxImage.removeAttribute('src');
+        if (lastVisual) lastVisual.focus();
+      }
+
+      visualCards.forEach((card) => {
+        card.addEventListener('click', () => openVisual(card));
+      });
+
+      lightboxClose.addEventListener('click', closeVisual);
+      lightbox.addEventListener('click', (event) => {
+        if (event.target === lightbox) closeVisual();
       });
 
       themeButton.addEventListener('click', () => {
@@ -1109,10 +1669,17 @@
 
       document.addEventListener('keydown', (event) => {
         if (event.key.toLowerCase() === 'f') fullscreenButton.click();
-        if (event.key === 'Escape') nodes.forEach((node) => node.classList.remove('is-selected'));
+        if (event.key === 'Escape' && lightbox.classList.contains('is-open')) {
+          closeVisual();
+        } else if (event.key === 'Escape' && root.classList.contains('detail-open')) {
+          closeDetail();
+        }
       });
 
       setLens('all');
+      const requestedTitle = decodeURIComponent(location.hash.slice(1));
+      const requested = detailTriggers.find((trigger) => trigger.dataset.title === requestedTitle);
+      if (requested) showDetail(requested);
     })();
   </script>
 </body>

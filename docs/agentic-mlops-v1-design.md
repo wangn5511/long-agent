@@ -13,7 +13,7 @@ V1 以 OpenHands 作为任务执行 Agent runtime，在其外部实现一个面�
 
 - 一个 `MLOpsRun`，作为领域生命周期；
 - 若干 `AgentTask`，作为可独立分派和验证的阶段任务；
-- 一个或多个 `TaskAttempt`，每个 attempt 关联一个 OpenHands Conversation；
+- 一个或多个 `TaskAttempt`，每个 attempt 关联一个或多个有序的 OpenHands Conversation Episode；
 - 一个 Loop Controller，负责发现、触发、任务分解、分派、验证结果、持久化状态以及重试/停止；
 - 一个 OpenHands Task Agent，负责单个 attempt 内的事件历史、LLM、Action、Tool/Workspace、Observation 和再推理；
 - 一个 append-only 事件账本，作为可恢复的领域事实源；
@@ -130,7 +130,7 @@ Agent 可以提出改 batch size、改代码或换 calibration 的建议，但�
 
 | OpenHands 能力 | V1 用法 | 当前代码位置 |
 |---|---|---|
-| App Conversation | 一个 `TaskAttempt` 对应一个 Conversation | `openhands/app_server/app_conversation/` |
+| App Conversation | 一个 `TaskAttempt` 可由多个 bounded Conversation Episode 续接执行 | `openhands/app_server/app_conversation/` |
 | Conversation tags | 保存 `mlopsrunid`、`mlopstaskid`、attempt、协议版本 | `AppConversationInfo.tags` |
 | Agent Profile | 固定 Task Agent 的 LLM、MCP 和工具配置 | `openhands/app_server/settings/agent_profiles.py` |
 | Plugin | 注入 MLOps Skill、MCP 配置和 hooks | `AppConversationStartRequest.plugins` |
@@ -279,6 +279,7 @@ CREATED
 ```text
 WAITING_FOR_JOB
 WAITING_FOR_AGENT
+WAITING_EXTERNAL
 VALIDATING_RESULT
 RETRY_SCHEDULED
 PAUSED
@@ -310,7 +311,9 @@ CANCELLED
 ### 7.4 AgentTask 状态
 
 ```text
-PENDING -> DISPATCHED -> RUNNING -> RESULT_SUBMITTED -> VALIDATING
+PENDING -> DISPATCHED -> RUNNING
+  -> WAITING_EXTERNAL -> RUNNING
+  -> RESULT_SUBMITTED -> VALIDATING
   -> SUCCEEDED
   -> RETRY_SCHEDULED -> DISPATCHED
   -> NEEDS_DECISION
@@ -318,7 +321,7 @@ PENDING -> DISPATCHED -> RUNNING -> RESULT_SUBMITTED -> VALIDATING
   -> CANCELLED
 ```
 
-一个 Run 可以包含多个 task；一个 task 可以包含多个 attempt；一个 attempt 对应一个 Conversation。task 的成功不等于 Run 完成。
+一个 Run 可以包含多个 task；一个 task 可以包含多个 attempt；一个 attempt 可以跨多个 Conversation Episode。Conversation continuation 不增加 attempt number，也不消耗 retry 或试验预算；只有结构化失败及外环 `RetryDecided` 才能创建新 attempt。task 的成功不等于 Run 完成。
 
 ## 8. 事件模型
 
@@ -350,6 +353,9 @@ PENDING -> DISPATCHED -> RUNNING -> RESULT_SUBMITTED -> VALIDATING
 
 - `AgentTaskCreated`
 - `TaskAttemptDispatched`
+- `TaskAttemptYielded`
+- `AttemptContinuationLeaseRotated`
+- `TaskAttemptContinued`
 - `ConversationLinked`
 - `TaskResultSubmitted`
 - `TaskResultValidated`
@@ -635,7 +641,7 @@ Agent 看不到 `transition_run`、`schedule_retry`、`seal_release`、`promote_
 }
 ```
 
-允许的 status 为 `succeeded | failed | needs_decision | cancelled`。只有 validator 接受后，artifact candidate、lineage proposal 和状态变化才进入领域事实。
+允许的 status 为 `succeeded | failed | needs_decision | cancelled | waiting_external`。`waiting_external` 是调度信号而不是最终结果：仅当当前 Attempt 拥有 running Job 时，外环才保存 continuation checkpoint、轮换 Lease 并创建新 Conversation；兼容旧 Agent 的 `cancelled + running Job` 也按同一路径处理。其余结果只有经 validator 接受后，artifact candidate、lineage proposal 和状态变化才进入领域事实。
 
 ## 11. 端到端流程
 
@@ -1033,7 +1039,7 @@ spec:
 ### 20.1 端到端
 
 - [ ] 一份 RunSpec 能从数据落盘运行到模型部署；
-- [ ] 每个 Run 被拆成一个或多个 AgentTask，每个 TaskAttempt 关联一个 OpenHands Conversation；
+- [ ] 每个 Run 被拆成一个或多个 AgentTask，每个 TaskAttempt 可关联一个或多个有序 Conversation Episode；
 - [ ] Agent final answer 未经 validator 不能推进 Run；
 - [ ] 外环完成发现/触发、分派、结果验证、持久化、重试/停止；
 - [ ] 不依赖通用外部工作流引擎，但 Loop Engineering 明确拥有业务状态和 retry policy。
@@ -1063,10 +1069,12 @@ spec:
 ### 20.5 恢复
 
 - [ ] 在每个阶段杀死 Agent 后，外环可结束旧 attempt 并重新分派；
+- [ ] Conversation 上下文耗尽但 Job 仍运行时，外环保留同一 Attempt/Job，轮换 Lease 并创建新 Conversation；
+- [ ] continuation 不增加 attempt number，不消耗 retry/trial budget，旧 Lease 被拒绝；
 - [ ] launch 响应丢失不会重复启动 job；
 - [ ] lease fencing 能拒绝旧 Agent；
 - [ ] 重放所有事件得到相同 projection；
-- [ ] Conversation 丢失时可以从 Run Ledger 创建新的 TaskAttempt/Conversation 并继续。
+- [ ] Conversation 丢失时可以从 Run Ledger 区分 continuation 与 retry，并按对应语义继续。
 
 ### 20.6 安全与审计
 
@@ -1089,11 +1097,14 @@ spec:
 10. rollback target 必须是成功部署过的 sealed release；
 11. 所有生产副作用都有 intention event 和 observation event；
 12. projection 可由 events 完整重建。
+13. `WAITING_EXTERNAL -> RUNNING` 保持 attempt identity 与 Job ownership 不变；
+14. 每次 Conversation continuation 都必须轮换 Lease，旧 Episode 不能继续调用工具。
 
 ## 22. 已锁定决策
 
 - V1 使用 Loop Engineering 外环 + OpenHands Agent 内环；
-- 一个 TaskAttempt 对应一个 OpenHands Conversation；
+- 一个 TaskAttempt 可跨多个 OpenHands Conversation Episode；
+- continuation 保留 Attempt/Job，retry 才创建新 Attempt；
 - Agent 只处理一个 task，不拥有跨任务 lifecycle；
 - 外环负责发现/触发、分派、验证、持久化、attempt retry 和 stop；
 - 不使用外部工作流引擎；

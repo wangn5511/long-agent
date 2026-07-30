@@ -1,4 +1,4 @@
-"""Conversation dispatch adapters for one-attempt/one-conversation execution."""
+"""Conversation dispatch adapters for fenced task-attempt episodes."""
 
 from __future__ import annotations
 
@@ -150,6 +150,12 @@ class OpenHandsHTTPDispatcher:
             'mlopsattempt': str(context.attempt_number),
             'mlopsprotocol': 'v1',
         }
+        continuation = context.attempt_spec.get('_continuation')
+        yield_count = (
+            continuation.get('yield_count') if isinstance(continuation, dict) else None
+        )
+        if isinstance(yield_count, int) and not isinstance(yield_count, bool):
+            tags['mlopscontinuation'] = str(yield_count)
         action_norm = self._read_action_norm()
         initial_text = (
             'You are one task Agent inside an MLOps outer loop. Work only on '
@@ -182,7 +188,15 @@ class OpenHandsHTTPDispatcher:
             },
             'selected_repository': self.repository,
             'selected_branch': self.branch,
-            'title': f'MLOps {task.name} attempt {context.attempt_number}',
+            'title': (
+                f'MLOps {task.name} attempt {context.attempt_number}'
+                + (
+                    f' continuation {yield_count}'
+                    if isinstance(yield_count, int)
+                    and not isinstance(yield_count, bool)
+                    else ''
+                )
+            ),
             'trigger': 'automation',
             'tags': tags,
         }

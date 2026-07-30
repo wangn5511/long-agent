@@ -216,6 +216,13 @@ class LoopController:
                 idempotency_key=f'first-attempt:{task_record["id"]}',
             )
             run = self.ledger.get_run(run_id)
+        if attempt['status'] == AttemptStatus.WAITING_EXTERNAL:
+            return self._dispatch_attempt_continuation(
+                run=run,
+                task_record=task_record,
+                task=task,
+                attempt=attempt,
+            )
         if attempt['status'] == AttemptStatus.RUNNING:
             conversation_id = attempt.get('conversation_id')
             dispatch_key = attempt.get('dispatch_key')
@@ -317,15 +324,67 @@ class LoopController:
             lease_id=lease_id,
         )
 
-    def submit_result(self, run_id: str, result: TaskResult, lease_id: str) -> None:
+    def submit_result(self, run_id: str, result: TaskResult, lease_id: str) -> RunState:
         run = self.ledger.get_run(run_id)
+        attempt = self.ledger.get_attempt(result.attempt_id)
+        continuation = attempt['attempt_spec'].get('_continuation', {})
+        yield_count = (
+            continuation.get('yield_count', 0) if isinstance(continuation, dict) else 0
+        )
+        if not isinstance(yield_count, int) or isinstance(yield_count, bool):
+            raise InvariantViolation('attempt continuation count is invalid')
+        running_job_ids = [
+            job['id']
+            for job in self.ledger.list_job_attempts(run_id)
+            if job['task_attempt_id'] == result.attempt_id
+            and job['status'] == 'running'
+        ]
+        should_yield = result.status == 'waiting_external' or (
+            result.status == 'cancelled' and bool(running_job_ids)
+        )
+        episode_number = yield_count
+        if attempt['status'] == AttemptStatus.WAITING_EXTERNAL and result.status in {
+            'waiting_external',
+            'cancelled',
+        }:
+            # A caller may retry after the yield commit but before receiving
+            # its response. That request still belongs to the previous
+            # Conversation episode.
+            episode_number -= 1
+        if episode_number < 0:
+            raise InvariantViolation('attempt continuation episode is invalid')
+        idempotency_key = f'task-result:{result.attempt_id}:episode:{episode_number}'
+        if should_yield:
+            if not running_job_ids:
+                raise InvariantViolation(
+                    'waiting_external requires a running job owned by the attempt'
+                )
+            if (
+                result.artifact_candidates
+                or result.lineage_proposals
+                or result.next_attempt_proposal is not None
+            ):
+                raise InvariantViolation(
+                    'a yielded Conversation cannot publish artifacts, lineage, '
+                    'or a retry proposal'
+                )
+            self.ledger.yield_task_attempt(
+                run_id=run_id,
+                result=result,
+                lease_id=lease_id,
+                running_job_ids=running_job_ids,
+                expected_version=run['version'],
+                idempotency_key=idempotency_key,
+            )
+            return RunState.WAITING_EXTERNAL
         self.ledger.submit_task_result(
             run_id=run_id,
             result=result,
             lease_id=lease_id,
             expected_version=run['version'],
-            idempotency_key=f'task-result:{result.attempt_id}',
+            idempotency_key=idempotency_key,
         )
+        return RunState.VALIDATING_RESULT
 
     def validate_current_result(self, run_id: str) -> ValidationDisposition | None:
         run = self.ledger.get_run(run_id)
@@ -572,6 +631,11 @@ class LoopController:
         releases = self.ledger.list_releases(run['id'])
         deployments = self.ledger.list_deployments(run['id'])
         rollback = self.ledger.get_active_rollback(run['id'])
+        attempt_jobs = [
+            job
+            for job in self.ledger.list_job_attempts(run['id'])
+            if job['task_attempt_id'] == attempt['id']
+        ]
         return TaskContext(
             run_id=run['id'],
             run_version=run['version'],
@@ -598,7 +662,20 @@ class LoopController:
             ],
             completion_contract=task.completion_contract,
             attempt_spec=attempt['attempt_spec'],
-            evidence=[],
+            evidence=[
+                {
+                    'kind': 'job-attempt',
+                    'job_id': job['id'],
+                    'status': job['status'],
+                    'return_code': job['return_code'],
+                    'result': job['result'],
+                    'failure': job['failure'],
+                    'log_path': job['log_path'],
+                    'log_sha256': job['log_sha256'],
+                    'log_size_bytes': job['log_size_bytes'],
+                }
+                for job in attempt_jobs
+            ],
             domain_refs={
                 **({'release_id': releases[-1]['id']} if releases else {}),
                 **({'deployment_id': deployments[-1]['id']} if deployments else {}),
@@ -612,6 +689,66 @@ class LoopController:
                 ),
             },
         )
+
+    def _dispatch_attempt_continuation(
+        self,
+        *,
+        run: dict[str, Any],
+        task_record: dict[str, Any],
+        task: TaskSpec,
+        attempt: dict[str, Any],
+    ) -> str:
+        continuation = attempt['attempt_spec'].get('_continuation')
+        if not isinstance(continuation, dict):
+            raise InvariantViolation('waiting attempt has no continuation state')
+        yield_count = continuation.get('yield_count')
+        if (
+            not isinstance(yield_count, int)
+            or isinstance(yield_count, bool)
+            or yield_count < 1
+        ):
+            raise InvariantViolation('attempt continuation count is invalid')
+        lease_id, lease_generation = self.ledger.rotate_attempt_lease_for_continuation(
+            run_id=run['id'],
+            attempt_id=attempt['id'],
+            agent_instance_id=self.controller_id,
+            ttl_seconds=max(task.timeout_seconds + 300, 600),
+            expected_version=run['version'],
+            idempotency_key=(f'continuation-lease:{attempt["id"]}:{yield_count}'),
+        )
+        run = self.ledger.get_run(run['id'])
+        attempt = self.ledger.get_attempt(attempt['id'])
+        dispatch_key = f'dispatch:{attempt["id"]}:continuation:{yield_count}'
+        if lease_generation:
+            # A Conversation created with an expired lease cannot be reused:
+            # its immutable TaskContext still contains the stale fence token.
+            dispatch_key += f':lease-renewal:{lease_generation}'
+        context = self._build_task_context(
+            run=run,
+            task_record=task_record,
+            attempt=attempt,
+            lease_id=lease_id,
+        )
+        conversation_id = self.dispatcher.dispatch(
+            context=context,
+            task=task,
+            dispatch_key=dispatch_key,
+        )
+        run = self.ledger.get_run(run['id'])
+        self.ledger.continue_task_attempt(
+            run_id=run['id'],
+            attempt_id=attempt['id'],
+            conversation_id=conversation_id,
+            dispatch_key=dispatch_key,
+            lease_id=lease_id,
+            expected_version=run['version'],
+            idempotency_key=(f'continuation-dispatched:{attempt["id"]}:{yield_count}'),
+        )
+        self.dispatcher.start(
+            conversation_id=conversation_id,
+            dispatch_key=dispatch_key,
+        )
+        return conversation_id
 
     def approve_current_task(
         self, run_id: str, *, approved_by: str, reason: str

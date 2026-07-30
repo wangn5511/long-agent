@@ -440,6 +440,42 @@ def test_model_improvement_record_job_does_not_require_or_receive_gpu(
     assert 'device_requests' not in request
 
 
+def test_docker_job_manager_can_pin_operator_owned_gpu_devices(tmp_path: Path):
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    client = _FakeDockerClient()
+    image = 'rightarm@sha256:' + 'a' * 64
+    manager = DockerJobManager(
+        tmp_path / 'jobs',
+        workspace,
+        image_catalog={'train-eval-trial': image},
+        gpu_counts={'train-eval-trial': 3},
+        gpu_device_ids={'train-eval-trial': ['4', '5', '6']},
+        client=client,
+    )
+
+    manager.launch(
+        ['rightarm-mlops', 'train-eval-trial', '--gpus', '3'],
+        'trial-on-free-gpus',
+        owner_attempt_id='attempt-1',
+    )
+
+    request = client.containers.run_requests[0]
+    device_request = request['device_requests'][0]
+    assert device_request.count == 0
+    assert device_request.device_ids == ['4', '5', '6']
+
+    with pytest.raises(ValueError, match='matching its GPU count'):
+        DockerJobManager(
+            tmp_path / 'bad-jobs',
+            workspace,
+            image_catalog={'train-eval-trial': image},
+            gpu_counts={'train-eval-trial': 3},
+            gpu_device_ids={'train-eval-trial': ['4', '5']},
+            client=client,
+        )
+
+
 def test_artifact_staging_requires_declared_job_output_kind_and_hash(tmp_path: Path):
     workspace = tmp_path / 'workspace'
     workspace.mkdir()

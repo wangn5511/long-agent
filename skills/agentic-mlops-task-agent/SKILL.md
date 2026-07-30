@@ -19,6 +19,18 @@ release state, deployment state, and stop decisions.
 5. Use `mlops_launch_job` and `mlops_observe_job` for `rightarm-mlops` effects.
    Reuse a stable idempotency key when observing or recovering the same logical
    action. Local action-level correction stays in this Conversation.
+   A logical TaskAttempt may span multiple Conversations. If an owned Job is
+   still running when this Conversation must end, submit
+   `status=waiting_external`, summarize what is pending, and reference every
+   running Job as `job:<job_id>`. Do not cancel the Job and do not request a
+   retry. The outer loop durably preserves the Attempt and Job ownership,
+   rotates the lease, and starts a new Conversation.
+   If `attempt_spec._continuation` is present, this is such a resumed
+   Conversation: inspect its `job_ids` and the injected `job-attempt` evidence,
+   then call `mlops_observe_job` for those existing Jobs before considering any
+   new launch. Reuse the original logical idempotency keys. A Conversation
+   continuation does not create another Attempt and does not consume trial or
+   retry budget.
    Never probe controller ports, call its HTTP API directly, inspect controller
    implementation files, or bypass the MCP tools with a terminal command. A
    rejected tool invocation that produced no `job_id` is an argument or
@@ -58,11 +70,11 @@ release state, deployment state, and stop decisions.
      `mmaction-dataset`. Propose lineage from both sealed inputs to every
      output. The Agent may not invent arbitrary sample drops, relabel data,
      move validation samples, or bypass a `needs-decision` recommendation.
-   For an `improve-model` task, perform the whole bounded optimization loop in
-   this one Conversation. Read `run_spec.spec.optimization` before launching
-   anything and treat `maxTrials`, `patience`, `targetMacroF1Delta`,
-   `minImprovement`, resource limits, the immutable `val` split, and the fixed
-   11-class ontology as hard limits.
+   For an `improve-model` task, perform the bounded optimization loop across as
+   many recoverable Conversation episodes as its Jobs require. Read
+   `run_spec.spec.optimization` before launching anything and treat `maxTrials`,
+   `patience`, `targetMacroF1Delta`, `minImprovement`, resource limits, the
+   immutable `val` split, and the fixed 11-class ontology as hard limits.
    - Require exactly one sealed `mmaction-dataset` and one sealed `base-model`;
      at most one `training-init-model` may override the initialization weights
      without changing the incumbent being compared. Materialize these inputs

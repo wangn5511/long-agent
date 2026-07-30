@@ -82,7 +82,7 @@ DEFAULT_POLICY: Dict[str, Any] = {
     'min_improvement': 0.0005,
     'max_epochs': 50,
     'batch_size': 32,
-    'workers': 8,
+    'workers': 2,
     'gpus': 1,
 }
 POLICY_KEYS = frozenset(DEFAULT_POLICY)

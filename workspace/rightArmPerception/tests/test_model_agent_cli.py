@@ -230,7 +230,7 @@ def test_improve_dry_run_includes_the_normalized_policy(
         'min_improvement': 0.0005,
         'max_epochs': 50,
         'batch_size': 32,
-        'workers': 12,
+        'workers': 2,
         'gpus': 1,
     }
     assert output['will_dispatch'] is False

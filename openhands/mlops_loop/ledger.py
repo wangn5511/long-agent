@@ -892,6 +892,282 @@ class SQLiteLedger:
                 connection, run_id, version, RunState.VALIDATING_RESULT
             )
 
+    def yield_task_attempt(
+        self,
+        *,
+        run_id: str,
+        result: TaskResult,
+        lease_id: str,
+        running_job_ids: Sequence[str],
+        expected_version: int,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Fence one Conversation while preserving its Attempt and running Jobs."""
+
+        normalized_job_ids = sorted(set(running_job_ids))
+        if not normalized_job_ids:
+            raise InvariantViolation(
+                'a task attempt can wait externally only for a running job'
+            )
+        with self._transaction() as connection:
+            attempt = self._attempt_for_run(connection, run_id, result.attempt_id)
+            self._assert_lease(connection, result.attempt_id, lease_id)
+            if attempt['task_id'] != result.task_id:
+                raise InvariantViolation('task result ids do not match the attempt')
+            existing_event = self._idempotent_event(connection, run_id, idempotency_key)
+            if existing_event is not None:
+                payload = json.loads(existing_event['payload_json'])
+                if (
+                    existing_event['event_type'] != 'TaskAttemptYielded'
+                    or payload.get('job_ids') != normalized_job_ids
+                    or payload.get('source_status') != result.status
+                    or payload.get('reason') != result.summary
+                ):
+                    raise IdempotencyConflict(
+                        'task attempt yield was reused with a different payload'
+                    )
+                return payload
+            if attempt['status'] != AttemptStatus.RUNNING:
+                raise InvalidTransition(f'cannot yield attempt in {attempt["status"]}')
+            rows = connection.execute(
+                'SELECT id, status FROM mlops_job_attempts '
+                'WHERE task_attempt_id=? ORDER BY id',
+                (attempt['id'],),
+            ).fetchall()
+            persisted_running_job_ids = sorted(
+                row['id'] for row in rows if row['status'] == 'running'
+            )
+            if persisted_running_job_ids != normalized_job_ids:
+                raise InvariantViolation(
+                    'waiting job ids do not match the running jobs owned by the attempt'
+                )
+            attempt_spec = json.loads(attempt['attempt_spec_json'])
+            previous = attempt_spec.get('_continuation', {})
+            previous_yield_count = (
+                previous.get('yield_count', 0) if isinstance(previous, dict) else 0
+            )
+            if (
+                not isinstance(previous_yield_count, int)
+                or isinstance(previous_yield_count, bool)
+                or previous_yield_count < 0
+            ):
+                raise InvariantViolation('attempt continuation count is invalid')
+            yielded_at = time.time()
+            continuation = {
+                'yield_count': previous_yield_count + 1,
+                'job_ids': normalized_job_ids,
+                'reason': result.summary,
+                'source_status': result.status,
+                'previous_conversation_id': attempt['conversation_id'],
+                'yielded_at': yielded_at,
+            }
+            attempt_spec['_continuation'] = continuation
+            payload = {
+                'task_id': attempt['task_id'],
+                'attempt_id': attempt['id'],
+                **continuation,
+            }
+            _, version = self._append_event(
+                connection,
+                run_id=run_id,
+                expected_version=expected_version,
+                event_type='TaskAttemptYielded',
+                actor_type='task-agent',
+                actor_id=attempt['conversation_id'],
+                idempotency_key=idempotency_key,
+                payload=payload,
+            )
+            connection.execute(
+                'UPDATE mlops_task_attempts SET status=?, attempt_spec_json=? '
+                'WHERE id=?',
+                (
+                    AttemptStatus.WAITING_EXTERNAL,
+                    _canonical_json(attempt_spec),
+                    attempt['id'],
+                ),
+            )
+            connection.execute(
+                'UPDATE mlops_agent_tasks SET status=?, updated_at=? WHERE id=?',
+                (TaskStatus.WAITING_EXTERNAL, yielded_at, attempt['task_id']),
+            )
+            self._set_run_projection(
+                connection, run_id, version, RunState.WAITING_EXTERNAL
+            )
+            return payload
+
+    def rotate_attempt_lease_for_continuation(
+        self,
+        *,
+        run_id: str,
+        attempt_id: str,
+        agent_instance_id: str,
+        ttl_seconds: int,
+        expected_version: int,
+        idempotency_key: str,
+    ) -> tuple[str, int]:
+        """Issue a new fence token for the next Conversation of one Attempt."""
+
+        if ttl_seconds < 1:
+            raise ValueError('continuation lease TTL must be positive')
+        now = time.time()
+        with self._transaction() as connection:
+            attempt = self._attempt_for_run(connection, run_id, attempt_id)
+            if attempt['status'] != AttemptStatus.WAITING_EXTERNAL:
+                raise InvalidTransition(
+                    'a continuation lease requires a waiting task attempt'
+                )
+            attempt_spec = json.loads(attempt['attempt_spec_json'])
+            continuation = attempt_spec.get('_continuation')
+            if not isinstance(continuation, dict):
+                raise InvariantViolation('waiting attempt has no continuation state')
+            yield_count = continuation.get('yield_count')
+            if not isinstance(yield_count, int) or isinstance(yield_count, bool):
+                raise InvariantViolation('attempt continuation count is invalid')
+            rotation_events = connection.execute(
+                'SELECT * FROM mlops_events WHERE run_id=? '
+                'AND event_type=? ORDER BY sequence',
+                (run_id, 'AttemptContinuationLeaseRotated'),
+            ).fetchall()
+            matching_rotations = []
+            for event in rotation_events:
+                payload = json.loads(event['payload_json'])
+                if (
+                    payload.get('attempt_id') == attempt_id
+                    and payload.get('yield_count') == yield_count
+                ):
+                    matching_rotations.append((event, payload))
+            current_lease = connection.execute(
+                'SELECT * FROM mlops_attempt_leases WHERE attempt_id=?',
+                (attempt_id,),
+            ).fetchone()
+            if current_lease is not None and current_lease['expires_at'] > now:
+                for generation, (_, payload) in enumerate(matching_rotations):
+                    if payload.get('lease_id') == current_lease['lease_id']:
+                        return current_lease['lease_id'], generation
+            generation = len(matching_rotations)
+            effective_idempotency_key = idempotency_key
+            if matching_rotations:
+                effective_idempotency_key = f'{idempotency_key}:renew:{generation}'
+            existing_event = self._idempotent_event(
+                connection, run_id, effective_idempotency_key
+            )
+            if existing_event is not None:
+                if existing_event['event_type'] != 'AttemptContinuationLeaseRotated':
+                    raise IdempotencyConflict(
+                        'continuation lease key was reused by another event'
+                    )
+                payload = json.loads(existing_event['payload_json'])
+                return payload['lease_id'], payload.get('generation', generation)
+            lease_id = f'lease_{uuid4().hex}'
+            payload = {
+                'attempt_id': attempt_id,
+                'lease_id': lease_id,
+                'agent_instance_id': agent_instance_id,
+                'ttl_seconds': ttl_seconds,
+                'yield_count': yield_count,
+                'generation': generation,
+            }
+            self._append_event(
+                connection,
+                run_id=run_id,
+                expected_version=expected_version,
+                event_type='AttemptContinuationLeaseRotated',
+                actor_type='loop-controller',
+                actor_id='loop-controller',
+                idempotency_key=effective_idempotency_key,
+                payload=payload,
+            )
+            connection.execute(
+                'INSERT INTO mlops_attempt_leases '
+                '(attempt_id, lease_id, agent_instance_id, acquired_at, heartbeat_at, expires_at) '
+                'VALUES (?, ?, ?, ?, ?, ?) '
+                'ON CONFLICT(attempt_id) DO UPDATE SET '
+                'lease_id=excluded.lease_id, agent_instance_id=excluded.agent_instance_id, '
+                'acquired_at=excluded.acquired_at, heartbeat_at=excluded.heartbeat_at, '
+                'expires_at=excluded.expires_at',
+                (attempt_id, lease_id, agent_instance_id, now, now, now + ttl_seconds),
+            )
+            return lease_id, generation
+
+    def continue_task_attempt(
+        self,
+        *,
+        run_id: str,
+        attempt_id: str,
+        conversation_id: str,
+        dispatch_key: str,
+        lease_id: str,
+        expected_version: int,
+        idempotency_key: str,
+    ) -> None:
+        """Attach a new Conversation episode without allocating a new Attempt."""
+
+        with self._transaction() as connection:
+            attempt = self._attempt_for_run(connection, run_id, attempt_id)
+            self._assert_lease(connection, attempt_id, lease_id)
+            existing_event = self._idempotent_event(connection, run_id, idempotency_key)
+            if existing_event is not None:
+                payload = json.loads(existing_event['payload_json'])
+                if (
+                    existing_event['event_type'] != 'TaskAttemptContinued'
+                    or payload.get('conversation_id') != conversation_id
+                    or payload.get('dispatch_key') != dispatch_key
+                    or payload.get('lease_id') != lease_id
+                ):
+                    raise IdempotencyConflict(
+                        'task continuation was reused with a different payload'
+                    )
+                return
+            if attempt['status'] != AttemptStatus.WAITING_EXTERNAL:
+                raise InvalidTransition(
+                    'only a waiting task attempt can continue in a new Conversation'
+                )
+            attempt_spec = json.loads(attempt['attempt_spec_json'])
+            continuation = attempt_spec.get('_continuation')
+            if not isinstance(continuation, dict):
+                raise InvariantViolation('waiting attempt has no continuation state')
+            yield_count = continuation.get('yield_count')
+            if not isinstance(yield_count, int) or isinstance(yield_count, bool):
+                raise InvariantViolation('attempt continuation count is invalid')
+            payload = {
+                'task_id': attempt['task_id'],
+                'attempt_id': attempt_id,
+                'previous_conversation_id': attempt['conversation_id'],
+                'conversation_id': conversation_id,
+                'dispatch_key': dispatch_key,
+                'lease_id': lease_id,
+                'yield_count': yield_count,
+                'job_ids': continuation.get('job_ids', []),
+            }
+            _, version = self._append_event(
+                connection,
+                run_id=run_id,
+                expected_version=expected_version,
+                event_type='TaskAttemptContinued',
+                actor_type='loop-controller',
+                actor_id='loop-controller',
+                idempotency_key=idempotency_key,
+                payload=payload,
+            )
+            now = time.time()
+            connection.execute(
+                'UPDATE mlops_task_attempts SET conversation_id=?, dispatch_key=?, '
+                'status=? WHERE id=?',
+                (
+                    conversation_id,
+                    dispatch_key,
+                    AttemptStatus.RUNNING,
+                    attempt_id,
+                ),
+            )
+            connection.execute(
+                'UPDATE mlops_agent_tasks SET status=?, updated_at=? WHERE id=?',
+                (TaskStatus.RUNNING, now, attempt['task_id']),
+            )
+            self._set_run_projection(
+                connection, run_id, version, RunState.WAITING_FOR_AGENT
+            )
+
     def record_cost(
         self,
         *,
@@ -1007,12 +1283,13 @@ class SQLiteLedger:
                 for row in connection.execute(
                     'SELECT a.id FROM mlops_task_attempts a '
                     'JOIN mlops_agent_tasks t ON t.id=a.task_id '
-                    'WHERE t.run_id=? AND a.status IN (?, ?, ?)',
+                    'WHERE t.run_id=? AND a.status IN (?, ?, ?, ?)',
                     (
                         run_id,
                         AttemptStatus.CREATED,
                         AttemptStatus.DISPATCHED,
                         AttemptStatus.RUNNING,
+                        AttemptStatus.WAITING_EXTERNAL,
                     ),
                 ).fetchall()
             ]
@@ -1675,6 +1952,34 @@ class SQLiteLedger:
                 'UPDATE mlops_agent_tasks SET status=? WHERE run_id=? AND status NOT IN (?, ?)',
                 (TaskStatus.CANCELLED, run_id, TaskStatus.SUCCEEDED, TaskStatus.FAILED),
             )
+            active_attempt_ids = [
+                row['id']
+                for row in connection.execute(
+                    'SELECT a.id FROM mlops_task_attempts a '
+                    'JOIN mlops_agent_tasks t ON t.id=a.task_id '
+                    'WHERE t.run_id=? AND a.status IN (?, ?, ?, ?)',
+                    (
+                        run_id,
+                        AttemptStatus.CREATED,
+                        AttemptStatus.DISPATCHED,
+                        AttemptStatus.RUNNING,
+                        AttemptStatus.WAITING_EXTERNAL,
+                    ),
+                ).fetchall()
+            ]
+            if active_attempt_ids:
+                placeholders = ','.join('?' for _ in active_attempt_ids)
+                now = time.time()
+                connection.execute(
+                    f'UPDATE mlops_task_attempts SET status=?, finished_at=? '
+                    f'WHERE id IN ({placeholders})',
+                    (AttemptStatus.CANCELLED, now, *active_attempt_ids),
+                )
+                connection.execute(
+                    f'DELETE FROM mlops_attempt_leases '
+                    f'WHERE attempt_id IN ({placeholders})',
+                    active_attempt_ids,
+                )
             self._set_run_projection(connection, run_id, version, RunState.CANCELLED)
 
     def recover_expired_attempt(
@@ -2971,6 +3276,10 @@ class SQLiteLedger:
             event_type = event['event_type']
             payload = event['payload']
             if event_type == 'TaskAttemptDispatched':
+                state = RunState.WAITING_FOR_AGENT
+            elif event_type == 'TaskAttemptYielded':
+                state = RunState.WAITING_EXTERNAL
+            elif event_type == 'TaskAttemptContinued':
                 state = RunState.WAITING_FOR_AGENT
             elif event_type == 'TaskResultSubmitted':
                 state = RunState.VALIDATING_RESULT
